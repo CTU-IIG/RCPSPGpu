@@ -22,10 +22,17 @@
 
 using namespace std;
 
-ScheduleSolver::ScheduleSolver(uint8_t resNum, uint8_t *capRes, uint16_t actNum, uint8_t *actDur, uint16_t **actSuc, uint16_t *actNumSuc, uint8_t **actRes, bool verbose)
-		: numberOfResources(resNum), capacityOfResources(capRes), numberOfActivities(actNum), activitiesDuration(actDur),
-		  activitiesSuccessors(actSuc), numberOfSuccessors(actNumSuc), activitiesResources(actRes), solutionComputed(false), totalRunTime(-1)	{
-
+ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : solutionComputed(false), totalRunTime(-1)	{
+	// Copy pointers to data of instance.
+	numberOfResources = rcpspData.getNumberOfResources();
+	capacityOfResources = rcpspData.getCapacityOfResources();
+	numberOfActivities = rcpspData.getNumberOfActivities();
+	activitiesDuration = rcpspData.getActivitiesDuration();
+	numberOfSuccessors = rcpspData.getActivitiesNumberOfSuccessors();
+	activitiesSuccessors = rcpspData.getActivitiesSuccessors();
+	activitiesResources = rcpspData.getActivitiesResources();
+	
+	// Create required structures and copy data to GPU.
 	uint16_t *activitiesOrder = new uint16_t[numberOfActivities];
 	createInitialSolution(activitiesOrder);
 	if (prepareCudaMemory(activitiesOrder, verbose) == true)	{

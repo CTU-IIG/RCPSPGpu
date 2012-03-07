@@ -1,15 +1,37 @@
 #ifndef HLIDAC_PES_SCHEDULE_SOLVER_H
 #define HLIDAC_PES_SCHEDULE_SOLVER_H
 
+/*!
+ * \file ScheduleSolver.h
+ * \author Libor Bukata
+ * \brief RCPSP solver class.
+ */
+
 #include <iostream>
 #include <stdint.h>
 #include "CudaFunctions.cuh"
+#include "InputReader.h"
 
+/*!
+ * Constant that is used to turn on/off debug mode for GPU tabu hash.
+ * If DEBUG is on then some tabu hash statistics are printed to console.
+ */
 #define DEBUG_TABU_HASH 0
 
+/*!
+ * Tabu search meta heuristic is used to solve RCPSP. GPU computing power is exploited for fast solving of problem.
+ * \class ScheduleSolver
+ * \brief Instance of this class is able to solve resource constrained project scheduling problem.
+ */
 class ScheduleSolver {
 	public:
-		ScheduleSolver(uint8_t resNum, uint8_t *capRes, uint16_t actNum, uint8_t *actDur, uint16_t **actSuc, uint16_t *actNumSuc, uint8_t **actRes, bool verbose = false);
+		/*!
+		 * \param rcpspData Data of project instance.
+		 * \param verbose If true then extra informations are printed.
+		 * \exception runtime_error Cuda error occur.
+		 * \brief Copy pointers of project data, initialize required structures, create initial activities order and copy data to GPU.
+		 */
+		ScheduleSolver(const InputReader& rcpspData, bool verbose = false);
 
 		void solveSchedule(const uint32_t& maxIter = 100, const uint32_t& maxIterToDiversification = 10);
 		void printBestSchedule(bool verbose = true, std::ostream& OUT = std::cout) const;

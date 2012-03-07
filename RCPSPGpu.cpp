@@ -63,8 +63,7 @@ int main(int argc, char* argv[])	{
 			InputReader reader;
 			reader.readFromFile(filename);
 
-			ScheduleSolver solver(reader.getNumberOfResources(), reader.getCapacityOfResources(), reader.getNumberOfActivities(), reader.getActivitiesDuration(), 
-					reader.getActivitiesSuccessors(), reader.getActivitiesNumberOfSuccessors(), reader.getActivitiesResources(), verbose);
+			ScheduleSolver solver(reader, verbose);
 			solver.solveSchedule(numberOfIteration, maxIterSinceBest);
 
 			if (verbose == true)	{
