@@ -1,17 +1,42 @@
 #ifndef HLIDAC_PES_CONFIGURE_RCPSP_H
 #define HLIDAC_PES_CONFIGURE_RCPSP_H
 
-/* SCHEDULE SOLVER */
-#define SWAP_RANGE 60
+/*!
+ * \file ConfigureRCPSP.h
+ * \author Libor Bukata
+ * \brief Represents a setting of RCPSP.
+ */
 
-/* TABU LIST */
-#define TABU_LIST_SIZE 800
+#include <stdint.h>
+#include "DefaultConfigureRCPSP.h"
 
-/* CUDA CONFIGURE */
-#define NUMBER_OF_BLOCK_PER_MULTIPROCESSOR 2
+/*!
+ * \namespace ConfigureRCPSP
+ * \brief Configurable extern global variables are defined at this namespace.
+ */
+namespace ConfigureRCPSP {
 
-/* SOLUTION SET SIZE */
-#define SOLUTION_SET_SIZE 8
+	/* SCHEDULE SOLVER SETTINGS */
+
+	//! Tabu list size.
+	extern uint32_t TABU_LIST_SIZE;
+	//! Number of search iterations.
+	extern uint32_t NUMBER_OF_ITERATIONS;
+	//! Maximal number of iterations without improving of the read solution than other solution will be read.
+	extern uint32_t MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST;
+	//! Maximal distance between swapped activities.
+	extern uint32_t SWAP_RANGE;
+	//! Number of diversification swaps.
+	extern uint32_t DIVERSIFICATION_SWAPS;
+	//! Number of solutions at working set.
+	extern uint32_t NUMBER_OF_SET_SOLUTIONS;
+	//! Number of blocks per multiprocessor.
+	extern uint32_t NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR;
+	//! Maximal value of read counter for a set solution.
+	extern uint32_t MAXIMAL_VALUE_OF_READ_COUNTER;
+	//! If this variable is set to true then tabu hash will be used.
+	extern bool USE_TABU_HASH;
+}
 
 #endif
 

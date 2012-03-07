@@ -14,10 +14,9 @@ build: CreateHeaderFile RCPSPGpu
 # Zkompiluje program.
 CreateHeaderFile:
 	nvcc $(CAPABILITY) $(OPTIMISATION) -o CreateHeaderFile CreateHeaderFile.cpp InputReader.cpp --compiler-options $(GCC_OPTIONS)
-#	nvcc $(CAPABILITY) $(OPTIMISATION) -o CreateHeaderFile CreateHeaderFile.cpp InputReader.cpp --compiler-bindir CudaGCC/ --compiler-options $(GCC_OPTIONS)
 
 RCPSPGpu:
-	nvcc $(CAPABILITY) $(OPTIMISATION) --ptxas-options=-v -o RCPSPGpu RCPSPGpu.cpp InputReader.cpp ScheduleSolver.cu SourcesLoad.cpp CudaFunctions.cu --compiler-options $(GCC_OPTIONS)
+	nvcc $(CAPABILITY) $(OPTIMISATION) --ptxas-options=-v -o RCPSPGpu RCPSPGpu.cpp ConfigureRCPSP.cpp InputReader.cpp ScheduleSolver.cu SourcesLoad.cpp CudaFunctions.cu --compiler-options $(GCC_OPTIONS)
 
 clean:
 	rm -f CreateHeaderFile RCPSPGpu

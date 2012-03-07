@@ -476,8 +476,11 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			uint32_t threadBestCost = blockMergeArray[threadIdx.x].cost;
 			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j, blockActivitiesDuration, blockResourceIndices,
 					threadResourcesLoad, threadStartValues, threadStartTimesById);
-			uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, move->i, move->j, move->i, move->j);
-			uint32_t hashPenalty = cudaData.hashMap[hashIdx];
+			uint32_t hashPenalty = 0;
+			if (cudaData.useTabuHash == true)	{
+				uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, move->i, move->j, move->i, move->j);
+				hashPenalty += cudaData.hashMap[hashIdx];
+			}
 			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
 			if ((isPossibleMove && totalEval+(totalEval == iterBestMove.cost ? 2 : 0)+hashPenalty < threadBestCost) || totalEval < blockBestCost)	{
 				struct MoveInfo newBestThreadSolution = { .i = move->i, .j = move->j, .cost = totalEval };
@@ -556,9 +559,11 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			blockCurrentOrder[iterBestMove.j] = t;
 			// Add move to tabu list.
 			cudaAddTurnToTabuList(cudaData.numberOfActivities, iterBestMove.i, iterBestMove.j, blockTabuList, blockTabuCache, blockTabuIdx, blockTabuListSize);
-			// Add move to hash table.
-			uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, 0, 0, iterBestMove.i, iterBestMove.j);
-			++cudaData.hashMap[hashIdx];
+			if (cudaData.useTabuHash == true)	{
+				// Add move to hash table.
+				uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, 0, 0, iterBestMove.i, iterBestMove.j);
+				++cudaData.hashMap[hashIdx];
+			}
 		}
 		__syncthreads();
 

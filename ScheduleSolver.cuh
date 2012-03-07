@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include "CudaFunctions.cuh"
 #include "InputReader.h"
+#include "ConfigureRCPSP.h"
 
 /*!
  * Constant that is used to turn on/off debug mode for GPU tabu hash.
@@ -33,7 +34,7 @@ class ScheduleSolver {
 		 */
 		ScheduleSolver(const InputReader& rcpspData, bool verbose = false);
 
-		void solveSchedule(const uint32_t& maxIter = 100, const uint32_t& maxIterToDiversification = 10);
+		void solveSchedule(const uint32_t& maxIter = ConfigureRCPSP::NUMBER_OF_ITERATIONS, const uint32_t& maxIterSinceBest = ConfigureRCPSP::MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST);
 		void printBestSchedule(bool verbose = true, std::ostream& OUT = std::cout) const;
 
 		~ScheduleSolver();

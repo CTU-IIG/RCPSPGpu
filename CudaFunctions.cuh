@@ -49,6 +49,7 @@ struct CudaData {
 	uint8_t *tabuCaches;
 
 	uint32_t *hashMap;
+	bool useTabuHash;
 
 	uint32_t solutionsSetSize;
 	uint16_t *solutionsSet;

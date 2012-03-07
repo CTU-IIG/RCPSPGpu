@@ -215,11 +215,11 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	
 	/* CREATE INITIAL START SET SOLUTIONS */
 	srand(time(NULL));
-	SolutionInfo *infoAboutSchedules = new SolutionInfo[SOLUTION_SET_SIZE];
-	uint16_t *randomSchedules = new uint16_t[SOLUTION_SET_SIZE*numberOfActivities], *schedWr = randomSchedules;
+	SolutionInfo *infoAboutSchedules = new SolutionInfo[ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS];
+	uint16_t *randomSchedules = new uint16_t[ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS*numberOfActivities], *schedWr = randomSchedules;
 
 	// Rewrite to sets.
-	for (uint16_t b = 0; b < SOLUTION_SET_SIZE; ++b)	{
+	for (uint16_t b = 0; b < ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS; ++b)	{
 		makeDiversification(activitiesOrder, successorsMatrix, 100);
 		infoAboutSchedules[b].readCounter = 0;
 		infoAboutSchedules[b].solutionCost = evaluateOrder(activitiesOrder);
@@ -234,11 +234,12 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 	cudaData.numberOfActivities = numberOfActivities;
 	cudaData.numberOfResources = numberOfResources;
-	cudaData.maxTabuListSize = TABU_LIST_SIZE;
-	cudaData.solutionsSetSize = SOLUTION_SET_SIZE;
-	cudaData.swapRange = SWAP_RANGE;
-	cudaData.maximalValueOfReadCounter = 3;
-	cudaData.numberOfDiversificationSwaps = 20;
+	cudaData.maxTabuListSize = ConfigureRCPSP::TABU_LIST_SIZE;
+	cudaData.solutionsSetSize = ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS;
+	cudaData.swapRange = ConfigureRCPSP::SWAP_RANGE;
+	cudaData.useTabuHash = ConfigureRCPSP::USE_TABU_HASH;
+	cudaData.maximalValueOfReadCounter = ConfigureRCPSP::MAXIMAL_VALUE_OF_READ_COUNTER;
+	cudaData.numberOfDiversificationSwaps = ConfigureRCPSP::DIVERSIFICATION_SWAPS;
 
 	/* GET CUDA INFO - SET NUMBER OF THREADS PER BLOCK */
 
@@ -258,7 +259,7 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		}
 
 		cudaCapability = prop.major*100+prop.minor*10;
-		numberOfBlock = prop.multiProcessorCount*NUMBER_OF_BLOCK_PER_MULTIPROCESSOR;
+		numberOfBlock = prop.multiProcessorCount*ConfigureRCPSP::NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR;
 
 		if (cudaCapability >= 200)	{
 			uint16_t sumOfCapacity = 0;
@@ -276,7 +277,7 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
 		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
 
-		if ((numberOfActivities-2)*SWAP_RANGE < USHRT_MAX)
+		if ((numberOfActivities-2)*cudaData.swapRange < USHRT_MAX)
 			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
 		else
 			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint32_t); // merge help array
@@ -522,7 +523,7 @@ bool ScheduleSolver::errorHandler(int16_t phase)	{
 	return true;
 }
 
-void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxIterToDiversification)	{
+void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxIterSinceBest)	{
 	#ifdef __GNUC__
 	timeval startTime, endTime, diffTime;
 	gettimeofday(&startTime, NULL);
@@ -535,7 +536,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 
 	// Set iterations parameters.
 	cudaData.numberOfIterationsPerBlock = maxIter;
-	cudaData.maximalIterationsSinceBest = maxIterToDiversification;
+	cudaData.maximalIterationsSinceBest = maxIterSinceBest;
 
 	/* RUN CUDA RCPSP SOLVER */
 
