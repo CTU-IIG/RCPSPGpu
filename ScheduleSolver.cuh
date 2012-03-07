@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <stdint.h>
+#include "CudaFunctions.cuh"
 
 class ScheduleSolver {
 	public:
@@ -15,12 +16,14 @@ class ScheduleSolver {
 
 	protected:
 
-		uint16_t* createInitialSolution(uint16_t *activitiesOrder);
-		bool prepareCudaMemory(uint16_t *activitiesOrder, uint16_t *levelsCounter, bool verbose);
+		void createInitialSolution(uint16_t *activitiesOrder);
+		bool prepareCudaMemory(uint16_t *activitiesOrder, bool verbose);
 		bool errorHandler(int16_t phase);
 		uint16_t evaluateOrder(const uint16_t *order, uint16_t *startTimesWriter = NULL, uint16_t *startTimesWriterById = NULL) const;
 		uint32_t computePrecedencePenalty(const uint16_t *startTimesById) const;
 		void printSchedule(uint16_t *scheduleOrder, bool verbose = true, std::ostream& OUT = std::cout) const;
+		bool checkSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, uint16_t i, uint16_t j) const;
+		void makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t numberOfSwaps);
 		void freeCudaMemory();
 
 	private:
@@ -50,37 +53,30 @@ class ScheduleSolver {
 		// Number of predecessors;
 		uint16_t *numberOfPredecessors;
 		// Activities required sources.
-		uint8_t **activitesResources;
+		uint8_t **activitiesResources;
+		//! Critical Path Makespan. (Critical Path Method)
+		int32_t criticalPathMakespan;
 		
 
 		/* MUTABLE DATA */	
 
 		// Best schedule order.
+		bool solutionComputed;
 		uint16_t *bestScheduleOrder;
 
 		/* CUDA DATA */
 
+		CudaData cudaData;
 		uint16_t cudaCapability;
 		uint16_t numberOfBlock;
 		uint32_t dynSharedMemSize;
 		uint32_t numberOfThreadsPerBlock;
 
+		uint8_t *cudaActivitiesResourcesArray;
 		uint16_t *cudaSuccessorsArray;
-		uint16_t *cudaSuccessorsIdxs;
+		uint16_t *cudaSuccessorsIdxsArray;
 		uint16_t *cudaPredecessorsArray;	
-		uint16_t *cudaPredecessorsIdxs;
-		uint32_t *cudaBestBlocksCost;
-		uint16_t *cudaBestBlocksOrder;
-		uint32_t *cudaTabuLists;
-		uint8_t *cudaTabuCaches;
-		uint16_t *cudaCapacityIdxs;
-		uint16_t *cudaStartTimesById;
-
-		uint32_t *cudaStateOfCommunication;
-		uint32_t *cudaBlocksBestEval;
-		uint16_t *cudaBlocksBestSolution;
-
-		uint32_t *cudaHashMap;
+		uint16_t *cudaPredecessorsIdxsArray;
 
 		/* MISC DATA */
 

@@ -1,151 +1,170 @@
+#include <cstdio>
+#include <iostream>
+#include <curand_kernel.h>
+#include "ConfigureRCPSP.h"
+#include "CudaConstants.h"
+#include "CudaFunctions.cuh"
+
+using std::cerr;
+using std::cout;
+using std::endl;
+
+texture<uint8_t,1,cudaReadModeElementType> cudaActivitiesResourcesTex;
+texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsTex;
+texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsIndicesTex;
+texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsTex;
+texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsIndicesTex;
+
+/* CUDA BIND TEXTURES */
+
+int bindTexture(void *texData, int32_t arrayLength, int option)	{
+	switch (option)	{
+		case 0:
+			return cudaBindTexture(NULL, cudaActivitiesResourcesTex, texData, arrayLength*sizeof(uint8_t));
+		case 1:
+			return cudaBindTexture(NULL, cudaSuccessorsTex, texData, arrayLength*sizeof(uint16_t));
+		case 2:
+			return cudaBindTexture(NULL, cudaSuccessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
+		case 3:
+			return cudaBindTexture(NULL, cudaPredecessorsTex, texData, arrayLength*sizeof(uint16_t));
+		case 4:
+			return cudaBindTexture(NULL, cudaPredecessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
+		default:
+			cerr<<"bindTextures: Invalid option!"<<endl;
+	}
+	return cudaErrorInvalidValue;
+}
+
+int unbindTexture(int option)	{
+	switch (option)	{
+		case 0:
+			return cudaUnbindTexture(cudaActivitiesResourcesTex);
+		case 1:
+			return cudaUnbindTexture(cudaSuccessorsTex);
+		case 2:
+			return cudaUnbindTexture(cudaSuccessorsIndicesTex);
+		case 3:
+			return cudaUnbindTexture(cudaPredecessorsTex);
+		case 4:
+			return cudaUnbindTexture(cudaPredecessorsIndicesTex);
+		default:
+			cerr<<"unbindTextures: Invalid option!"<<endl;
+	}
+	return cudaErrorInvalidValue;
+}
+
 
 /*	CUDA IMPLEMENT OF SOURCES LOAD */
 
-__device__ void cudaPrepareArrays(uint16_t *cudaResourcesLoad, uint16_t *cudaStartValues, uint8_t *cudaRequiredItems, uint16_t *cudaStartTimesById)	{
-	for (uint16_t i = 0; i < TOTAL_SUM_OF_CAPACITY; ++i)	{
-		cudaResourcesLoad[i] = 0;
-		if (i < MAXIMUM_CAPACITY_OF_RESOURCE)	{
-			cudaRequiredItems[i] = 0;
-			cudaStartValues[i] = 0;
-		}
-	}
-	for (uint16_t i = 0; i < NUMBER_OF_ACTIVITIES; ++i)
-		cudaStartTimesById[i] = 0;
+inline __device__ void cudaPrepareArrays(const CudaData& cudaData, uint16_t *& resourcesLoad, uint16_t *& startValues, uint16_t *& startTimesById)	{
+	for (uint16_t i = 0; i < cudaData.sumOfCapacities; ++i)
+		resourcesLoad[i] = 0;
+	for (uint16_t i = 0; i < cudaData.maximalCapacityOfResource; ++i)
+		startValues[i] = 0;
+	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)
+		startTimesById[i] = 0;
 }
 
-__device__ uint16_t cudaGetEarliestStartTime(uint16_t actId, uint8_t numRes, uint16_t *cudaResourcesLoad, uint16_t *cudaResourcesIdxs) {
+inline __device__ uint16_t cudaGetEarliestStartTime(const uint16_t& numberOfResources, const uint16_t& activityId, uint16_t *&resourcesLoad, uint16_t *&resourceIndices) {
 	uint16_t bestStart = 0;
-	for (uint8_t resourceId = 0; resourceId < numRes; ++resourceId)	{
-		uint8_t activityRequirement = cudaActivitiesResources[actId*numRes+resourceId];
+	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
+		uint8_t activityRequirement = tex1Dfetch(cudaActivitiesResourcesTex, activityId*numberOfResources+resourceId);
 		if (activityRequirement > 0)
-			bestStart = max(cudaResourcesLoad[cudaResourcesIdxs[resourceId]+activityRequirement-1], bestStart);
+			bestStart = max(resourcesLoad[resourceIndices[resourceId+1]-activityRequirement], bestStart);
 	}
 	return bestStart;
 }
 
-__device__ void cudaAddActivity(uint16_t actId, uint16_t activityStart, uint16_t activityStop, uint8_t numRes, uint16_t *cudaResourcesLoad,  uint16_t *cudaResIdxs, uint16_t *cudaStartValues, uint8_t *cudaReqItems)	{
-	bool writeValue, workDone;
-	uint16_t sourceReq, curLoad, idx;
-	for (uint8_t resourceId = 0; resourceId < numRes; ++resourceId)	{
-		sourceReq = cudaActivitiesResources[actId*numRes+resourceId];
-		for (uint8_t capIdx = cudaResIdxs[resourceId+1]-cudaResIdxs[resourceId]; capIdx > 0; --capIdx)	{
-			curLoad = cudaResourcesLoad[cudaResIdxs[resourceId]+capIdx-1];
-			if (sourceReq > 0)	{
-				if (curLoad <= activityStart)	{
-					cudaResourcesLoad[cudaResIdxs[resourceId]+capIdx-1] = activityStop;
-					--sourceReq;
-					idx = 0;
-					while (cudaStartValues[idx] != 0)	{
-						if (cudaReqItems[idx] > 0)
-							--cudaReqItems[idx];
-						++idx;
-					}
-				} else if (curLoad < activityStop)	{
-					cudaResourcesLoad[cudaResIdxs[resourceId]+capIdx-1] = activityStop;
-					--sourceReq;
-					idx = 0;
-					writeValue = true;
-					while (cudaStartValues[idx] != 0)	{
-						if (cudaStartValues[idx] > curLoad && cudaReqItems[idx] > 0)
-							--cudaReqItems[idx];
-						if (cudaStartValues[idx] == curLoad)
-							writeValue = false;
-						++idx;
-					}
-					if (writeValue == true && curLoad > 0)	{
-						cudaStartValues[idx] = curLoad;
-						cudaReqItems[idx] = cudaActivitiesResources[actId*numRes+resourceId];
-					}
+inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_t& activityStart, const uint16_t& activityStop,
+		const uint16_t& numberOfResources, uint16_t *&resourceIndices,  uint16_t *&resourcesLoad, uint16_t *&startValues)	{
+	
+	int32_t requiredSquares, timeDiff;
+	uint32_t c, k, capacityOfResource, resourceRequirement, baseResourceIdx;
+	uint32_t startTimePreviousUnit, newStartTime, resourceStartIdx;
+	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
+		resourceStartIdx = resourceIndices[resourceId];
+		capacityOfResource = resourceIndices[resourceId+1]-resourceStartIdx;
+		resourceRequirement = tex1Dfetch(cudaActivitiesResourcesTex, activityId*numberOfResources+resourceId);
+		requiredSquares = resourceRequirement*(activityStop-activityStart);
+		if (requiredSquares > 0)	{
+			baseResourceIdx = capacityOfResource-resourceRequirement;
+			startTimePreviousUnit = ((resourceRequirement < capacityOfResource) ? resourcesLoad[resourceStartIdx+baseResourceIdx-1] : activityStop);
+			newStartTime = min(activityStop, startTimePreviousUnit);
+			if (activityStart < startTimePreviousUnit)	{
+				for (k = baseResourceIdx; k < capacityOfResource; ++k)	{
+					resourcesLoad[resourceStartIdx+k] = newStartTime;
 				}
-			} else {
-				idx = 0;
-				workDone = true;
-				while (cudaStartValues[idx] != 0)	{
-					if (cudaReqItems[idx] != 0)	{
-						workDone = false;
+				requiredSquares -= resourceRequirement*(newStartTime-activityStart); 
+			}
+			c = 0; k = 0;
+			newStartTime = activityStop;
+			while (requiredSquares > 0 && k < capacityOfResource)	{
+				if (resourcesLoad[resourceStartIdx+k] < newStartTime)	{
+					if (c >= resourceRequirement)
+						newStartTime = startValues[c-resourceRequirement];
+					timeDiff = newStartTime-max(resourcesLoad[resourceStartIdx+k], activityStart);
+					if (requiredSquares-timeDiff > 0)	{
+						requiredSquares -= timeDiff;
+						startValues[c++] = resourcesLoad[resourceStartIdx+k];
+						resourcesLoad[resourceStartIdx+k] = newStartTime;
+					} else {
+						resourcesLoad[resourceStartIdx+k] = newStartTime-timeDiff+requiredSquares;
 						break;
 					}
-					++idx;
 				}
-				if (workDone == true)	{
-					break;
-				} else {
-					writeValue = true;
-					cudaResourcesLoad[cudaResIdxs[resourceId]+capIdx-1] = cudaStartValues[idx];
-					idx = 0;
-					while (cudaStartValues[idx] != 0)	{
-						if (curLoad < cudaStartValues[idx] && cudaReqItems[idx] > 0)
-							--cudaReqItems[idx];
-						if (curLoad == cudaStartValues[idx])
-							writeValue = false;
-						++idx;
-					}
-					if (writeValue == true && curLoad > activityStart)	{
-						cudaStartValues[idx] = curLoad;
-						cudaReqItems[idx] = cudaActivitiesResources[actId*numRes+resourceId];
-					}
-				}
+				++k;
 			}
 		}
-		idx = 0;
-		while (cudaStartValues[idx] != 0)
-			cudaStartValues[idx++] = 0;
 	}
 }
 
 /* CUDA IMPLEMENT OF BASE SCHEDULE SOLVER FUNCTIONS */
 
-
-__device__ uint16_t cudaEvaluateOrder(uint16_t numAct, uint8_t numRes, uint16_t *cudaBlockOrder, uint16_t actX, uint16_t actY,
-		uint16_t *cudaStartTimesWriterById, uint16_t *cudaResourcesLoad, uint16_t *cudaStartValues, uint8_t *cudaRequiredItems, uint16_t *cudaResIdxs, uint16_t *cudaPredIdxs)	{
+__device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration,
+		 uint16_t *&resourceIndices, uint16_t *resourcesLoad, uint16_t *startValues, uint16_t *startTimesWriterById)	{
 
 	uint16_t start = 0, scheduleLength = 0;
 
-	cudaPrepareArrays(cudaResourcesLoad, cudaStartValues, cudaRequiredItems, cudaStartTimesWriterById);
+	cudaPrepareArrays(cudaData, resourcesLoad, startValues, startTimesWriterById);
 	
-	for (uint16_t i = 0; i < numAct; ++i)	{
+	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)	{
 
-		uint16_t activityId = cudaBlockOrder[i];
+		uint16_t activityId = blockOrder[i];
 
-		if (i == actX)
-			activityId = cudaBlockOrder[actY];
+		if (i == indexI)
+			activityId = blockOrder[indexJ];
 
-		if (i == actY)
-			activityId = cudaBlockOrder[actX];
+		if (i == indexJ)
+			activityId = blockOrder[indexI];
 
-		for (uint16_t j = 0; j < (cudaPredIdxs[activityId+1]-cudaPredIdxs[activityId]); ++j)	{
-			uint16_t predecessorId = tex1Dfetch(cudaPredecessorsTex, cudaPredIdxs[activityId]+j);
-			start = max(cudaStartTimesWriterById[predecessorId]+cudaActivitiesDuration[predecessorId], start);
+		uint16_t baseIndex = tex1Dfetch(cudaPredecessorsIndicesTex, activityId);
+		uint16_t numberOfPredecessors = tex1Dfetch(cudaPredecessorsIndicesTex, activityId+1)-baseIndex;
+		for (uint16_t j = 0; j < numberOfPredecessors; ++j)	{
+			uint16_t predecessorId = tex1Dfetch(cudaPredecessorsTex, baseIndex+j);
+			start = max(startTimesWriterById[predecessorId]+activitiesDuration[predecessorId], start);
 		}
 
-		start = max(cudaGetEarliestStartTime(activityId, numRes, cudaResourcesLoad, cudaResIdxs), start);
-		cudaAddActivity(activityId, start, start+cudaActivitiesDuration[activityId], numRes, cudaResourcesLoad, cudaResIdxs, cudaStartValues, cudaRequiredItems);
-		scheduleLength = max(scheduleLength, start+cudaActivitiesDuration[activityId]);
+		start = max(cudaGetEarliestStartTime(cudaData.numberOfResources, activityId, resourcesLoad, resourceIndices), start);
 
-		cudaStartTimesWriterById[activityId] = start;
+		uint16_t stop = start+activitiesDuration[activityId];
+		cudaAddActivity(activityId, start, stop, cudaData.numberOfResources, resourceIndices, resourcesLoad, startValues);
+		scheduleLength = max(scheduleLength, stop);
+
+		startTimesWriterById[activityId] = start;
 	}
 
 	return scheduleLength;
 }
 
-__device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint16_t *cudaSucIdxs, uint16_t *cudaStartTimesById)	{
-	uint32_t penalty = 0;
-	for (uint16_t activityId = 0; activityId < numAct; ++activityId)	{
-		for (uint16_t j = 0; j < (cudaSucIdxs[activityId+1]-cudaSucIdxs[activityId]); ++j)	{
-			uint16_t successorId = tex1Dfetch(cudaSuccessorsTex, cudaSucIdxs[activityId]+j);
-			if (cudaStartTimesById[activityId]+cudaActivitiesDuration[activityId] > cudaStartTimesById[successorId])
-				penalty += cudaStartTimesById[activityId]+cudaActivitiesDuration[activityId]-cudaStartTimesById[successorId];
-		}
-	}
-	return PRECEDENCE_PENALTY*penalty;
-}
+
+/* HASH TABLE INDEX FUNCTION */
 
 __device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlockOrder, uint16_t actX, uint16_t actY, uint32_t actI, uint32_t actJ)	{
 	uint32_t hashValue = 1;
-/*
+
 	hashValue *= (R+2*actI);
 	hashValue ^= actI;
-*/
+
 	for (uint32_t i = 1; i < numAct-1; ++i)	{
 		uint32_t activityId = cudaBlockOrder[i];
 		if (i == actX)
@@ -156,10 +175,10 @@ __device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlo
 		hashValue *= (R+2*activityId*i);
 		hashValue ^= activityId;
 	}
-/*
+
 	hashValue *= (R+2*actJ);
 	hashValue ^= actJ;
-*/
+
 	hashValue /= 2;
 	hashValue &= 0x00ffffff;	// Size of hash table is 2^24.
 
@@ -168,227 +187,522 @@ __device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlo
 
 /*	CUDA IMPLEMENT OF SIMPLE TABU LIST */
 
-__device__ bool cudaIsPossibleMove(uint16_t numAct, uint16_t i, uint16_t j, uint8_t *tabuCache)	{
-	if (tabuCache[i*numAct+j] == 0 || tabuCache[j*numAct+i] == 0)
+inline __device__ bool cudaIsPossibleMove(const uint16_t& numberOfActivities, const uint16_t& i, const uint16_t& j, uint8_t *&tabuCache)	{
+	if (tabuCache[i*numberOfActivities+j] == 0 || tabuCache[j*numberOfActivities+i] == 0)
 		return true;
 	else
 		return false;
 }
 
-__device__ void cudaAddTurnToTabuList(uint16_t numAct, uint16_t i, uint16_t j, uint32_t *tabuList, uint8_t *tabuCache, uint16_t& tabuIdx)	{
-	uint32_t listEl = tabuList[tabuIdx];
-	uint16_t iOld = (listEl>>16), jOld = (listEl & 0x0000ffff);
-	if (iOld != USHRT_MAX && jOld != USHRT_MAX)	{
-		tabuCache[iOld*numAct+jOld] = tabuCache[jOld*numAct+iOld] = 0;
-	}
+inline __device__ void cudaAddTurnToTabuList(const uint16_t& numberOfActivities, const uint16_t& i, const uint16_t& j,
+		MoveIndices *&tabuList, uint8_t *&tabuCache, uint16_t& tabuIdx, const uint16_t& tabuListSize)	{
 
-	tabuCache[i*numAct+j] = tabuCache[j*numAct+i] = 1;
+	MoveIndices move = tabuList[tabuIdx];
+	uint16_t iOld = move.i, jOld = move.j;
 
-	listEl = (((uint32_t) i)<<16)+j;
-	tabuList[tabuIdx] = listEl;
+	if (iOld != 0 && jOld != 0)
+		tabuCache[iOld*numberOfActivities+jOld] = tabuCache[jOld*numberOfActivities+iOld] = 0;
 
-	tabuIdx = (tabuIdx+1) % TABU_LIST_SIZE;
+	move.i = i; move.j = j;
+	tabuList[tabuIdx] = move;
+	tabuCache[i*numberOfActivities+j] = tabuCache[j*numberOfActivities+i] = 1;
+
+	tabuIdx = (tabuIdx+1) % tabuListSize;
 }
 
-/*	CUDA IMPLEMENT OF GLOBAL KERNEL */
-#include <cstdio>
 
-__global__ void solveRCPSP(uint16_t numAct, uint8_t numRes, uint16_t *sucIdx, uint16_t *predIdx, uint32_t *bcost, uint16_t *border, uint32_t *tab, uint8_t *tabCache,
-		uint16_t *capIdxs, uint16_t *startTimesId, uint32_t maxIter, uint32_t maxIterToDiversification, uint32_t *blocksStateCommunication, uint32_t *blocksBestEval,
-		uint16_t *blocksBestSolution, uint32_t *hashTable)	{
+/* CHECK PRECEDENCE FUNCTIONS */
+
+inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, const int16_t& activityId1, const int16_t& activityId2)	{
+	uint32_t bitPossition = activityId1*numberOfActivities+activityId2;
+	if ((successorsMatrix[bitPossition/8] & (1<<(bitPossition % 8))) > 0)
+		return true;
+	else
+		return false;
+}
+
+__device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
+	if (i > j)	{
+		int16_t t = i;
+		i = j; j = t;
+	}
+	for (uint16_t k = i; k < j; ++k)	{
+		if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[k], order[j]) == true)
+			return false;
+	}
+	if (!light)	{
+		for (uint16_t k = i+1; k <= j; ++k)	{
+			if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[i], order[k]) == true)
+				return false;
+		}
+	}
+	return true;
+}
+
+/* HELP FUNCTIONS */
+
+inline __device__ void cudaClearTabuList(const uint16_t& numberOfActivities, MoveIndices *tabuList, uint8_t *tabuCache, const uint16_t& numberOfElements)	{
+	for (uint16_t k = threadIdx.x; k < numberOfElements; k += blockDim.x)	{
+		MoveIndices *tabuMove = &tabuList[k];
+		uint16_t i = tabuMove->i, j = tabuMove->j;
+		tabuCache[i*numberOfActivities+j] = tabuCache[j*numberOfActivities+i] = 0;
+		tabuMove->j = tabuMove->i = 0;
+	}
+	__syncthreads();
+	return;
+}
+
+inline __device__ void cudaReadExternalSolution(const uint16_t& numberOfActivities, MoveIndices *tabuList, uint8_t *tabuCache, const uint16_t& tabuListSize,
+		uint16_t *blockOrder, uint16_t *externalSolution, MoveIndices *externalTabuList)	{
+	// Clear current tabu list and tabu cache.
+	cudaClearTabuList(numberOfActivities, tabuList, tabuCache, tabuListSize);
+	// Read block order.
+	for (uint16_t i = threadIdx.x; i < numberOfActivities; i += blockDim.x)
+		blockOrder[i] = externalSolution[i];
+	// Read block tabu list and create tabu cache.
+	for (uint16_t i = threadIdx.x; i < tabuListSize; i += blockDim.x)	{
+		tabuList[i] = externalTabuList[i];
+		MoveIndices *move = &tabuList[i];
+		uint16_t i = move->i, j = move->j;
+		tabuCache[i*numberOfActivities+j] = tabuCache[j*numberOfActivities+i] = 1;
+	}
+	__syncthreads();
+	return;
+}
+
+/* REORDER ARRAY FUNCTION */
+
+template <typename T>
+inline __device__ uint32_t cudaReorderMoves(uint32_t *moves, uint32_t *resultMerge, T *threadsCounter, const uint32_t& size)	{
+	threadsCounter[threadIdx.x] = 0;
+	uint32_t threadAmount = size/blockDim.x+1;
+	for (uint32_t i = threadIdx.x*threadAmount; i < size && i < (threadIdx.x+1)*threadAmount; ++i)	{
+		if (moves[i] != 0)
+			++threadsCounter[threadIdx.x];
+	}
+	__syncthreads();
+	for (uint32_t k = 0; (1<<k) < blockDim.x; ++k)   {
+		uint32_t step = 1<<k;
+		uint32_t begIdx = (step-1)+2*step*threadIdx.x;
+		if (begIdx < blockDim.x-step)
+			threadsCounter[begIdx+step] += threadsCounter[begIdx];
+		__syncthreads();
+	}
+	for (int32_t k = (blockDim.x>>1); k > 1; k >>= 1)	{
+		uint32_t step = k/2;
+		uint32_t begIdx = (k-1)+2*step*threadIdx.x;
+		if (begIdx < blockDim.x-step) 
+			threadsCounter[begIdx+step] += threadsCounter[begIdx];
+		__syncthreads();
+	}
+	uint32_t threadStartIndex = threadIdx.x > 0 ? threadsCounter[threadIdx.x-1] : 0;
+	for (uint32_t i = threadIdx.x*threadAmount; i < size && i < (threadIdx.x+1)*threadAmount; ++i)	{
+		if (moves[i] != 0)
+			resultMerge[threadStartIndex++] = moves[i];
+	}
+	__syncthreads();
+	return threadsCounter[blockDim.x-1];
+}
+
+/* DIVERSIFICATION FUNCTION */
+
+inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfActivities, uint16_t *order, const uint8_t *successorsMatrix, 
+		const uint32_t& diversificationSwaps, curandState *state)	{
+		
+	uint32_t performedSwaps = 0;
+	while (performedSwaps < diversificationSwaps)  {
+		uint16_t i = (curand(state) % (numberOfActivities-2)) + 1;
+		uint16_t j = (curand(state) % (numberOfActivities-2)) + 1;
+		if ((i != j) && (cudaCheckSwapPrecedencePenalty(order, successorsMatrix, numberOfActivities, i, j) == true))	{
+			uint16_t t = order[i];
+			order[i] = order[j];
+			order[j] = t;
+			++performedSwaps;
+		}
+	}
+	return;
+}
+
+
+/*	CUDA IMPLEMENT OF GLOBAL KERNEL */
+
+__global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	
 	__shared__ uint32_t iter;
-	__shared__ uint16_t iterBestI, iterBestJ;
-	__shared__ uint32_t iterBestCost;
-
+	__shared__ MoveInfo iterBestMove;
 	__shared__ uint32_t blockBestCost;
-	__shared__ uint16_t blockCurrentOrder[NUMBER_OF_ACTIVITIES];
+	__shared__ uint16_t *blockBestSolution;
+	__shared__ uint32_t maximalNeighbourhoodSize;
+	__shared__ uint8_t *blockActivitiesDuration;
+	__shared__ uint16_t *blockCurrentOrder;
+	__shared__ uint8_t *blockSuccessorsMatrix;
+	__shared__ MoveInfo *blockMergeArray;
+	__shared__ uint16_t *blockPartitionCounterUInt16;
+	__shared__ uint32_t *blockPartitionCounterUInt32;
+	__shared__ MoveIndices *blockReorderingArray;
+	__shared__ MoveIndices *blockReorderingArrayHelp;
+
 	__shared__ uint16_t blockTabuIdx;
-	__shared__ uint32_t *blockTabuList;
+	__shared__ uint16_t blockTabuListSize;
+	__shared__ MoveIndices *blockTabuList;
 	__shared__ uint8_t *blockTabuCache;
+	__shared__ int32_t blockIndexOfSetSolution;
+	__shared__ bool blockReadPossible;
+	__shared__ bool blockReadFromSet;
+	__shared__ bool blockWriteBestBlock;
+	__shared__ bool blockReadSetSolution;
+	__shared__ bool blockWriteSetSolution;
 	__shared__ bool blockReadGlobalBestSolution;
 	__shared__ bool blockWriteGlobalBestSolution;
-	__shared__ uint32_t blockNumberIterationSinceBest;
-	__shared__ uint16_t blockResourceIdxs[NUMBER_OF_RESOURCES+1];
+	__shared__ uint32_t blockNumberOfIterationsSinceBest;
+	__shared__ uint32_t blockMaximalNumberOfIterationsSinceBest;
+	__shared__ uint16_t *blockResourceIndices;
 
+	__shared__ curandState randState;
 
-	uint16_t *threadStartTimesById = startTimesId+(blockIdx.x*blockDim.x+threadIdx.x)*numAct;
-
-	if (threadIdx.x == 0)	{
-		iter = 0;
-		blockTabuIdx = 0;
-		blockTabuList = tab+blockIdx.x*TABU_LIST_SIZE;
-		blockTabuCache = tabCache+blockIdx.x*numAct*numAct;
-		blockBestCost = bcost[blockIdx.x];
-		for (uint8_t i = 0; i < NUMBER_OF_RESOURCES+1; ++i)	{
-			blockResourceIdxs[i] = capIdxs[i];
-		}
-		blockNumberIterationSinceBest = 0;
-		blockWriteGlobalBestSolution = false;
-	}
-
-	extern __shared__ uint64_t threadsResult[];
-	#ifndef SHARED_ALLOC
 	uint16_t threadResourcesLoad[TOTAL_SUM_OF_CAPACITY];
 	uint16_t threadStartValues[MAXIMUM_CAPACITY_OF_RESOURCE];
-	uint8_t threadReqItems[MAXIMUM_CAPACITY_OF_RESOURCE];
-	#else
-	uint16_t *basePtr = (uint16_t*) &threadsResult[blockDim.x];
-	uint16_t *threadResourcesLoad = basePtr+threadIdx.x*TOTAL_SUM_OF_CAPACITY;
-	uint16_t *threadStartValues = basePtr+blockDim.x*TOTAL_SUM_OF_CAPACITY+threadIdx.x*MAXIMUM_CAPACITY_OF_RESOURCE;
-	uint8_t *threadReqItems = (uint8_t*) basePtr+blockDim.x*(TOTAL_SUM_OF_CAPACITY+MAXIMUM_CAPACITY_OF_RESOURCE);
-	threadReqItems += threadIdx.x*MAXIMUM_CAPACITY_OF_RESOURCE;
-	#endif
+	uint16_t threadStartTimesById[NUMBER_OF_ACTIVITIES];
 
-	for (uint16_t i = threadIdx.x; i < numAct; i += blockDim.x)	{
-		blockCurrentOrder[i] = border[blockIdx.x*numAct+i];
+	extern __shared__ uint8_t dynamicSharedMemory[];
+	if (threadIdx.x == 0)	{
+		/* SET VARIABLES */
+		iter = 0;
+		blockTabuIdx = 0;
+		blockReadFromSet = true;
+		blockWriteBestBlock = false;
+		blockReadSetSolution = false;
+		blockWriteSetSolution = false;
+		blockReadGlobalBestSolution = false;
+		blockWriteGlobalBestSolution = false;
+		blockNumberOfIterationsSinceBest = 0;
+		blockIndexOfSetSolution = blockIdx.x % cudaData.solutionsSetSize;
+		maximalNeighbourhoodSize = (cudaData.numberOfActivities-2)*cudaData.swapRange;
+		blockReorderingArray = cudaData.swapFreeMergeArray+blockIdx.x*maximalNeighbourhoodSize;
+		blockReorderingArrayHelp = cudaData.mergeHelpArray+blockIdx.x*maximalNeighbourhoodSize;
+		blockTabuList = cudaData.tabuLists+blockIdx.x*cudaData.maxTabuListSize;
+		blockTabuListSize = cudaData.maxTabuListSize-((cudaData.maxTabuListSize*blockIdx.x)/(4*gridDim.x));
+		blockTabuCache = cudaData.tabuCaches+blockIdx.x*cudaData.numberOfActivities*cudaData.numberOfActivities;
+		blockBestSolution = cudaData.blocksBestSolution+blockIdx.x*cudaData.numberOfActivities;
+
+		curand_init(3*blockIdx.x+71, blockIdx.x, 0, &randState);
+		blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
+		
+		/* ASSIGN SHARED MEMORY */
+		blockMergeArray = (MoveInfo*) dynamicSharedMemory; 
+		if (maximalNeighbourhoodSize < 0xffff)	{
+			blockPartitionCounterUInt16 = (uint16_t*) (blockMergeArray+blockDim.x);
+			blockPartitionCounterUInt32 = NULL;
+			blockCurrentOrder = blockPartitionCounterUInt16+blockDim.x;
+		} else	{
+			blockPartitionCounterUInt32 = (uint32_t*) (blockMergeArray+blockDim.x);
+			blockPartitionCounterUInt16 = NULL;
+			blockCurrentOrder = (uint16_t*) (blockPartitionCounterUInt32+blockDim.x);
+		}	
+		blockResourceIndices = blockCurrentOrder+cudaData.numberOfActivities;
+		blockActivitiesDuration = (uint8_t*) (blockResourceIndices+cudaData.numberOfResources+1);
+		if (cudaData.copySuccessorsMatrixToSharedMemory)
+			blockSuccessorsMatrix = blockActivitiesDuration+cudaData.numberOfActivities;
+		else
+			blockSuccessorsMatrix = cudaData.successorsMatrix;
 	}
-
 	__syncthreads();
 
+	for (uint32_t i = threadIdx.x; i < cudaData.numberOfResources+1; i += blockDim.x)	{
+		blockResourceIndices[i] = cudaData.resourceIndices[i];
+	}
 
-	while (iter < maxIter)	{
+	for (uint32_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)	{
+		blockActivitiesDuration[i] = cudaData.activitiesDuration[i];
+	}
 
-		threadsResult[threadIdx.x] = 0xffffffffffffffff;
+	if (cudaData.copySuccessorsMatrixToSharedMemory)	{
+		for (uint32_t i = threadIdx.x; i < cudaData.successorsMatrixSize; i += blockDim.x)
+			blockSuccessorsMatrix[i] = cudaData.successorsMatrix[i];
+	}
 
-		for (uint32_t a = threadIdx.x+SWAP_RANGE; a < (numAct-1)*SWAP_RANGE; a += blockDim.x)	{
-			uint16_t i = a/SWAP_RANGE;
-			uint16_t j = (a % SWAP_RANGE)+i+1;
-			if (j < numAct-1)	{
-				uint32_t threadBestCost = threadsResult[threadIdx.x]>>32;
-				uint32_t totalEval = cudaEvaluateOrder(numAct, numRes, blockCurrentOrder, i, j, threadStartTimesById, threadResourcesLoad, threadStartValues, threadReqItems, blockResourceIdxs, predIdx);
-				totalEval += cudaComputePrecedencePenalty(numAct, sucIdx, threadStartTimesById);
-			//	uint32_t hashTablePenalty = HASH_PENALTY_WEIGHT*hashTable[cudaComputeHashTableIndex(numAct, blockCurrentOrder, 0xffff, 0xffff, i, j)];
-				uint32_t hashTablePenalty = HASH_PENALTY_WEIGHT*hashTable[cudaComputeHashTableIndex(numAct, blockCurrentOrder, i, j, 0, 0)];
-		//		uint32_t hashTablePenalty = 0;
-				bool isPossibleMove = cudaIsPossibleMove(numAct, i, j, blockTabuCache);
-	//			bool isPossibleMove = true;
+	// Block have to obtain initial read access.
+	if (threadIdx.x == 0)	{
+		while (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
+			;
+		blockBestCost = cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost;
+	}
+	__syncthreads();
 
-				if ((isPossibleMove && totalEval+hashTablePenalty < threadBestCost) || totalEval < blockBestCost)	{
-/*					if (hashTablePenalty > 0)	{
-						printf("Hash penalty: %d\n", hashTablePenalty);
-					} */
-					threadsResult[threadIdx.x] = 0ul;
-					// Probability of lost best solution (if totalEval < blockBestCost) is small. 
-					threadsResult[threadIdx.x] |= totalEval+hashTablePenalty;
-					threadsResult[threadIdx.x] <<= 16;
-					threadsResult[threadIdx.x] |= i;
-					threadsResult[threadIdx.x] <<= 16;
-					threadsResult[threadIdx.x] |= j;
+	// Copy solution from a set of solutions to local block order.
+	for (uint32_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)	{
+		blockCurrentOrder[i] = cudaData.solutionsSet[blockIndexOfSetSolution*cudaData.numberOfActivities+i];
+	}
+	__syncthreads();
+
+	// Free read lock.
+	if (threadIdx.x == 0)	{
+		atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+	}
+
+
+	while (iter < cudaData.numberOfIterationsPerBlock)	{
+
+		for (uint16_t i = threadIdx.x+1; i < (cudaData.numberOfActivities-1); i += blockDim.x)	{
+			bool relationsBroken = false;
+			struct MoveIndices info;
+			for (uint16_t j = i+1; j < i+1+cudaData.swapRange; ++j)	{
+				info.i = info.j = 0;
+				if ((i < cudaData.numberOfActivities-2) && (j < cudaData.numberOfActivities-1) && !relationsBroken)	{
+					if (cudaGetMatrixBit(blockSuccessorsMatrix, cudaData.numberOfActivities, blockCurrentOrder[i], blockCurrentOrder[j]) == false)	{
+						info.i = i; info.j = j;
+					}	else	{
+						relationsBroken = true;
+					}
 				}
+				blockReorderingArray[(i-1)*cudaData.swapRange+(j-1-i)] = info;
+			}
+		}
+		__syncthreads();
+
+		uint32_t swapMoves = 0;
+		if (blockPartitionCounterUInt16 != NULL)
+			swapMoves = cudaReorderMoves((uint32_t*) blockReorderingArray, (uint32_t*) blockReorderingArrayHelp,  blockPartitionCounterUInt16, maximalNeighbourhoodSize);
+		else
+			swapMoves = cudaReorderMoves((uint32_t*) blockReorderingArray, (uint32_t*) blockReorderingArrayHelp,  blockPartitionCounterUInt32, maximalNeighbourhoodSize);
+
+		for (uint32_t i = threadIdx.x; i < swapMoves; i += blockDim.x)	{
+			struct MoveIndices *move = &blockReorderingArrayHelp[i];
+			if (cudaCheckSwapPrecedencePenalty(blockCurrentOrder, blockSuccessorsMatrix, cudaData.numberOfActivities, move->i, move->j, true) == false)	{
+				move->i = move->j = 0;
+			}
+		}
+		__syncthreads();
+		
+		if (blockPartitionCounterUInt16 != NULL)
+			swapMoves = cudaReorderMoves((uint32_t*) blockReorderingArrayHelp, (uint32_t*) blockReorderingArray,  blockPartitionCounterUInt16, swapMoves);
+		else
+			swapMoves = cudaReorderMoves((uint32_t*) blockReorderingArrayHelp, (uint32_t*) blockReorderingArray,  blockPartitionCounterUInt32, swapMoves);
+
+
+		blockMergeArray[threadIdx.x].cost = 0xffffffff;
+		for (uint32_t i = threadIdx.x; i < swapMoves; i += blockDim.x)	{
+			struct MoveIndices *move = &blockReorderingArray[i];
+			uint32_t threadBestCost = blockMergeArray[threadIdx.x].cost;
+			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j, blockActivitiesDuration, blockResourceIndices,
+					threadResourcesLoad, threadStartValues, threadStartTimesById);
+			uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, move->i, move->j, move->i, move->j);
+			uint32_t hashPenalty = cudaData.hashMap[hashIdx];
+			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
+			if ((isPossibleMove && totalEval+(totalEval == iterBestMove.cost ? 2 : 0)+hashPenalty < threadBestCost) || totalEval < blockBestCost)	{
+				struct MoveInfo newBestThreadSolution = { .i = move->i, .j = move->j, .cost = totalEval };
+				blockMergeArray[threadIdx.x] = newBestThreadSolution;
 			}
 		}
 		__syncthreads();
 
 		for (uint16_t k = blockDim.x/2; k > 0; k >>= 1)	{
 			if (threadIdx.x < k)	{
-				if ((threadsResult[threadIdx.x] & 0xffffffff00000000) > (threadsResult[threadIdx.x+k] & 0xffffffff00000000))
-					threadsResult[threadIdx.x] = threadsResult[threadIdx.x+k];
+				if (blockMergeArray[threadIdx.x].cost > blockMergeArray[threadIdx.x+k].cost)
+					blockMergeArray[threadIdx.x] = blockMergeArray[threadIdx.x+k];
 			}
 			__syncthreads();
 		}
 
 		if (threadIdx.x == 0)	{
-			iterBestCost = threadsResult[0]>>32;
-			iterBestJ = (threadsResult[0] & 0x000000000000ffff);
-			iterBestI = (threadsResult[0] & 0x00000000ffff0000)>>16;
-			if (atomicCAS(blocksStateCommunication, NOT_WRITED, WRITING_DATA) == NOT_WRITED || (*blocksBestEval >= iterBestCost && atomicCAS(blocksStateCommunication, DATA_AVAILABLE, WRITING_DATA) == DATA_AVAILABLE))	{
-				blockWriteGlobalBestSolution = true;
-			} else if ((blockNumberIterationSinceBest > maxIterToDiversification || blockBestCost > *blocksBestEval+10) && atomicCAS(blocksStateCommunication, DATA_AVAILABLE, READING_DATA) == DATA_AVAILABLE)	{
-		//		printf("Read SOLUTION\n");
-				blockReadGlobalBestSolution = true;	
-				blockNumberIterationSinceBest = 0;
+			blockReadPossible = false;
+			iterBestMove = blockMergeArray[0];
+			if (iterBestMove.cost < blockBestCost)	{
+				blockWriteBestBlock = true;
+				blockBestCost = iterBestMove.cost;
+				blockNumberOfIterationsSinceBest = 0;
+			}
+
+			if (blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest)	{
+				bool globalAccess = false, setAccess = false;
+				if (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+					globalAccess = true;
+				if (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+					setAccess = true;
+
+				if (globalAccess && setAccess)	{
+
+					if (blockReadFromSet && blockBestCost < cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost)	{
+						blockWriteSetSolution = true;
+						cudaData.solutionsSetInfo[blockIndexOfSetSolution].readCounter = 0;
+						cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost = blockBestCost;
+					}	else	{
+						atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+					}
+
+					if (blockBestCost < *cudaData.globalBestSolutionCost)	{
+						blockWriteGlobalBestSolution = true;
+						*cudaData.globalBestSolutionCost = blockBestCost;
+					}	else	{
+						atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+					}
+
+					if (!blockReadSetSolution && !blockReadGlobalBestSolution)	{
+						if (blockReadFromSet == true)
+							blockReadGlobalBestSolution = true;
+						else
+							blockReadSetSolution = true;
+
+						blockReadFromSet = !blockReadFromSet;
+					}
+				} else {
+					if (setAccess)
+						atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+					if (globalAccess)
+						atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+				}
+			}  else if (!blockWriteBestBlock)	{
+				++blockNumberOfIterationsSinceBest;
 			}
 		}
 		
-		if ((threadsResult[0] & 0x00000000ffffffff) == 0x00000000ffffffff)	{
-			// Empty expanded neighborhood.
-			break;
-		}
-
-		if (threadIdx.x == 0)	{
-			// Aply best move.
-			uint16_t t = blockCurrentOrder[iterBestI];
-			blockCurrentOrder[iterBestI] = blockCurrentOrder[iterBestJ];
-			blockCurrentOrder[iterBestJ] = t;
+		if (blockMergeArray[0].cost == 0xffffffff)	{
+			// Empty expanded neighborhood. Tabu list will be pruned.
+			cudaClearTabuList(cudaData.numberOfActivities, blockTabuList, blockTabuCache, blockTabuListSize/3);
+		} else if (threadIdx.x == 0)	{
+			// Apply best move.
+			uint16_t t = blockCurrentOrder[iterBestMove.i];
+			blockCurrentOrder[iterBestMove.i] = blockCurrentOrder[iterBestMove.j];
+			blockCurrentOrder[iterBestMove.j] = t;
 			// Add move to tabu list.
-			cudaAddTurnToTabuList(numAct, iterBestI, iterBestJ, blockTabuList, blockTabuCache, blockTabuIdx);
+			cudaAddTurnToTabuList(cudaData.numberOfActivities, iterBestMove.i, iterBestMove.j, blockTabuList, blockTabuCache, blockTabuIdx, blockTabuListSize);
+			// Add move to hash table.
+			uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, 0, 0, iterBestMove.i, iterBestMove.j);
+			++cudaData.hashMap[hashIdx];
 		}
 		__syncthreads();
 
-		if (threadIdx.x == 1)	{
-	//		atomicAdd(&hashTable[cudaComputeHashTableIndex(numAct, blockCurrentOrder, iterBestI, iterBestJ, iterBestI, iterBestJ)], 1);
-			atomicAdd(&hashTable[cudaComputeHashTableIndex(numAct, blockCurrentOrder, 0xffff, 0xffff, 0, 0)], 1);
-	//		__threadfence();
-	//		printf("%d\n", cudaComputeHashTableIndex(numAct, blockCurrentOrder, iterBestI, iterBestJ, iterBestI, iterBestJ));
+		if (blockWriteBestBlock == true)	{
+			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
+				blockBestSolution[i] = blockCurrentOrder[i];
+			blockWriteBestBlock = false;
 		}
-
-		if (iterBestCost < blockBestCost)	{
-			// Update best found solution.
-			for (uint16_t i = threadIdx.x; i < numAct; i += blockDim.x)	{
-				border[blockIdx.x*numAct+i] = blockCurrentOrder[i];
-			}
-			if (threadIdx.x == 0)	{
-				blockBestCost = iterBestCost;
-				blockNumberIterationSinceBest = 0;	
-		//		printf("block id %d best cost: %d\n", blockIdx.x, blockBestCost);
-			}
-		} else if (threadIdx.x == 0 && !blockReadGlobalBestSolution) {
-	//		printf("MISB: %d\n", blockNumberIterationSinceBest);
-			++blockNumberIterationSinceBest;
-		}
+		__syncthreads();
 
 		if (blockWriteGlobalBestSolution == true)	{
-			for (uint16_t i = threadIdx.x; i < numAct; i += blockDim.x)	{
-				blocksBestSolution[i] = blockCurrentOrder[i];
-			}
+/*			if (threadIdx.x == 0)	{
+				printf("block %d [%d]: Write global best solution!\n", blockIdx.x, iter);
+				printf("block %d [%d]: %d\n", blockIdx.x, iter, blockBestCost);
+			} */
+			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
+				cudaData.globalBestSolution[i] = blockBestSolution[i];
+			// Copy tabu list + zeros padding.
+			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
+				cudaData.globalBestSolutionTabuList[i] = blockTabuList[i];
+			__syncthreads();
 			if (threadIdx.x == 0)	{
-				*blocksBestEval = iterBestCost;
-		//		printf("write %d[%d]: %d\n",blockIdx.x, iter, *blocksBestEval);
+				blockWriteGlobalBestSolution = false;
+				atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
 			}
-			__threadfence();
+		}
+
+		if (blockWriteSetSolution == true)	{
+		/*	if (threadIdx.x == 0)	{
+				printf("block %d [%d]: Write set solution!\n", blockIdx.x, iter);
+				printf("block %d [%d]: %d\n", blockIdx.x, iter, blockBestCost);
+			} */
+			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
+				cudaData.solutionsSet[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
+			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
+				cudaData.solutionSetTabuLists[blockIndexOfSetSolution*cudaData.maxTabuListSize+i] = blockTabuList[i];
+			__syncthreads();
+			if (threadIdx.x == 0)	{
+				blockWriteSetSolution = false;
+				atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+			}
 		}
 
 		if (blockReadGlobalBestSolution == true)	{
-			for (uint16_t i = threadIdx.x; i < numAct; i += blockDim.x)	{
-				blockCurrentOrder[i] = blocksBestSolution[i];
-			}
-			// Clear tabu list and tabu cache.
-			for (uint16_t i = threadIdx.x; i < TABU_LIST_SIZE; i += blockDim.x)	{
-				uint32_t listElement = blockTabuList[i];
-				uint16_t a = (listElement>>16);
-				uint16_t b = (listElement & 0x0000ffff);
-				blockTabuCache[a*numAct+b] = blockTabuCache[b*numAct+a] = 0;
-				blockTabuList[i] = 0xffffffff;
-			}
-
 			if (threadIdx.x == 0)	{
-				// No set blockBestCost variable!! This readed solution is recorded by other block.
-				printf("read %d[%d]: %d\n",blockIdx.x,iter,*blocksBestEval);
+				if (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+					blockReadPossible = true;
+			}
+			__syncthreads();
+			if (blockReadPossible)	{
+	//			if (threadIdx.x == 0)
+	//				printf("block %d [%d]: Read global best solution!\n", blockIdx.x, iter);
+				// Read global best solution to memory.
+				cudaReadExternalSolution(cudaData.numberOfActivities, blockTabuList, blockTabuCache, blockTabuListSize,
+						blockCurrentOrder, cudaData.globalBestSolution, cudaData.globalBestSolutionTabuList);
+				if (threadIdx.x == 0)	{
+					blockBestCost = *cudaData.globalBestSolutionCost;
+					blockNumberOfIterationsSinceBest = 0;
+
+					blockReadGlobalBestSolution = false;
+					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
+					atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+				}
+			}
+		}
+
+		if (blockReadSetSolution == true)	{
+			if (threadIdx.x == 0)	{
+				if (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+					blockReadPossible = true;
+			}
+			__syncthreads();
+			if (blockReadPossible)	{
+	//			if (threadIdx.x == 0)
+	//				printf("block %d [%d]: Read set solution!\n", blockIdx.x, iter);
+				if (threadIdx.x == 0)	{
+					blockIndexOfSetSolution = (blockIndexOfSetSolution+1) % cudaData.solutionsSetSize;
+				}
+				__syncthreads();
+				// Read solution from a set to block memory.
+				cudaReadExternalSolution(cudaData.numberOfActivities, blockTabuList, blockTabuCache, blockTabuListSize, blockCurrentOrder,
+						cudaData.solutionsSet+blockIndexOfSetSolution*cudaData.numberOfActivities, cudaData.solutionSetTabuLists+blockIndexOfSetSolution*cudaData.maxTabuListSize);
+				if (threadIdx.x == 0)	{
+					blockBestCost = cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost;
+					uint32_t readCounter = ++cudaData.solutionsSetInfo[blockIndexOfSetSolution].readCounter;
+					blockNumberOfIterationsSinceBest = 0;
+
+					blockReadSetSolution = false;
+					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
+					atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+					if (readCounter > cudaData.maximalValueOfReadCounter)	// !! Use value from cudaData struct!!
+						cudaDiversificationOfSolution(cudaData.numberOfActivities, blockCurrentOrder, blockSuccessorsMatrix, cudaData.numberOfDiversificationSwaps, &randState);
+				}
 			}
 		}
 
 		if (threadIdx.x == 0)	{
-	//		if (iter % 100 == 0)
-	//			printf("state: %d\n", *blocksStateCommunication);
 			++iter;
 		}
 		__syncthreads();
-
-		if (blockWriteGlobalBestSolution == true)	{
-			atomicExch(blocksStateCommunication, DATA_AVAILABLE);
-			blockWriteGlobalBestSolution = false;
-		}
-
-		if (blockReadGlobalBestSolution == true)	{
-			atomicExch(blocksStateCommunication, DATA_AVAILABLE);
-			blockReadGlobalBestSolution = false;
-		}
 	}
 
+	// Write solution if is better than best found.
 	if (threadIdx.x == 0)	{
-		// Write best solution (with precedence + hash penalty). Cpu recompute penalty again.
-		bcost[blockIdx.x] = blockBestCost;
+		while (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
+			;
 	}
+	__syncthreads();
+
+	if (*cudaData.globalBestSolutionCost > blockBestCost)	{
+		for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
+			cudaData.globalBestSolution[i] = blockBestSolution[i];
+		for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
+			cudaData.globalBestSolutionTabuList[i] = blockTabuList[i];
+		if (threadIdx.x == 0)
+			*cudaData.globalBestSolutionCost = blockBestCost;
+	}
+	__syncthreads();
+
+	if (threadIdx.x == 0)
+		atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+
+	return;
+}
+
+
+/* START MAIN CUDA KERNEL */
+
+void runCudaSolveRCPSP(int numberOfBlock, int numberOfThreadsPerBlock, int computeCapability, int dynSharedMemSize, const CudaData& cudaData)	{
+	if (computeCapability >= 200)	{
+		// Prefare 16 kB shared memory + 48 kB cache L1.
+		cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
+	}
+	cout<<"Dynamic memory: "<<dynSharedMemSize<<endl;
+	cudaSolveRCPSP<<<numberOfBlock,numberOfThreadsPerBlock,dynSharedMemSize>>>(cudaData);
 }
 

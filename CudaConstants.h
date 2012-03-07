@@ -6,4 +6,13 @@
 #define MAXIMUM_CAPACITY_OF_RESOURCE 91
 #define TOTAL_SUM_OF_CAPACITY 331
 
+/* Hash constants. */
+#define HASH_TABLE_SIZE 16777216
+#define R 3144134277
+
+/* Blocks communication. */
+#define DATA_AVAILABLE 0
+#define DATA_ACCESS 1
+
 #endif
+

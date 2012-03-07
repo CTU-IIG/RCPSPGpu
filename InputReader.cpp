@@ -173,7 +173,15 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 	OUT<<"#define MAXIMUM_CAPACITY_OF_RESOURCE "<<maxCapacityOfResource<<endl;
 	OUT<<"#define TOTAL_SUM_OF_CAPACITY "<<maxTotalCapacity<<endl;
 	OUT<<endl;
-	OUT<<"#endif"<<endl;
+	OUT<<"/* Hash constants. */"<<endl;
+	OUT<<"#define HASH_TABLE_SIZE 16777216"<<endl;
+	OUT<<"#define R 3144134277"<<endl;
+	OUT<<endl;
+	OUT<<"/* Blocks communication. */"<<endl;
+	OUT<<"#define DATA_AVAILABLE 0"<<endl;
+	OUT<<"#define DATA_ACCESS 1"<<endl;
+	OUT<<endl;
+	OUT<<"#endif"<<endl<<endl;
 
 	OUT.close();
 }
