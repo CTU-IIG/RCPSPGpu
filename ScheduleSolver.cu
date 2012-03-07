@@ -16,6 +16,10 @@
 #include "ScheduleSolver.cuh"
 #include "SourcesLoad.h"
 
+#if DEBUG_TABU_HASH == 1
+#include <map>
+#endif
+
 using namespace std;
 
 ScheduleSolver::ScheduleSolver(uint8_t resNum, uint8_t *capRes, uint16_t actNum, uint8_t *actDur, uint16_t **actSuc, uint16_t *actNumSuc, uint8_t **actRes, bool verbose)
@@ -34,7 +38,7 @@ ScheduleSolver::ScheduleSolver(uint8_t resNum, uint8_t *capRes, uint16_t actNum,
 	}	else	{
 		bestScheduleOrder = new uint16_t[numberOfActivities];
 		if (verbose == true)
-			cout<<"All required resources allocated..."<<endl;
+			cout<<"All required resources allocated..."<<endl<<endl;
 	}
 }
 
@@ -114,138 +118,30 @@ void ScheduleSolver::createInitialSolution(uint16_t *activitiesOrder)	{
 		}
 	}
 
+	delete[] levels;
 	delete[] currentLevel;
 	delete[] newCurrentLevel;
 }
 
 bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	{
 
-	bool cudaError = false;
+	/* PREPARE DATA PHASE */
 
-	cudaData.numberOfActivities = numberOfActivities;
-	cudaData.numberOfResources = numberOfResources;
-	cudaData.maxTabuListSize = TABU_LIST_SIZE;
-	cudaData.solutionsSetSize = SOLUTION_SET_SIZE;
-	cudaData.swapRange = SWAP_RANGE;
+	/* CONVERT PREDECESSOR ARRAY TO 1D */
+	uint32_t numOfElPred = 0;
+	uint16_t *predIdxs = new uint16_t[numberOfActivities+1];
 
-	/* CONVERT SUCCESSOR AND PREDECESSOR ARRAYS TO 1D */
-	size_t numOfElSuc = 0, numOfElPred = 0;
-	uint16_t *sucIdxs = new uint16_t[numberOfActivities+1], *predIdxs = new uint16_t[numberOfActivities+1];
-
-	sucIdxs[0] = predIdxs[0] = 0;
+	predIdxs[0] = 0;
 	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-		numOfElSuc += numberOfSuccessors[i];
 		numOfElPred += numberOfPredecessors[i];
-		sucIdxs[i+1] = numOfElSuc;
 		predIdxs[i+1] = numOfElPred;
 	}
 
-	uint16_t *linSucArray = new uint16_t[numOfElSuc], *linPredArray = new uint16_t[numOfElPred], *wrPtr1 = linSucArray, *wrPtr2 = linPredArray;
+	uint16_t *linPredArray = new uint16_t[numOfElPred], *wrPtr = linPredArray;
 	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-		for (uint16_t j = 0; j < numberOfSuccessors[i]; ++j)	{
-			*(wrPtr1++) = activitiesSuccessors[i][j];	
-		}
 		for (uint16_t j = 0; j < numberOfPredecessors[i]; ++j)	{
-			*(wrPtr2++) = activitiesPredecessors[i][j];
+			*(wrPtr++) = activitiesPredecessors[i][j];
 		}
-	}
-
-	/* GET CUDA INFO - SET NUMBER OF THREADS PER BLOCK */
-	int devId = 0;
-	cudaDeviceProp prop;
-	uint32_t numberOfMultiprocessor = 0;
-	if (cudaGetDevice(&devId) == cudaSuccess && cudaGetDeviceProperties(&prop, devId) == cudaSuccess)	{
-		if (verbose == true)	{
-			cout<<"Device number: "<<devId<<endl;
-			cout<<"Device name: "<<prop.name<<endl;
-			cout<<"Device compute capability: "<<prop.major<<"."<<prop.minor<<endl;
-			cout<<"Number of multiprocessors: "<<prop.multiProcessorCount<<endl;
-			cout<<"Clock rate: "<<prop.clockRate<<endl;
-			cout<<"Size of global memory: "<<prop.totalGlobalMem<<endl;
-			cout<<"Size of shared memory per multiprocessor: "<<prop.sharedMemPerBlock<<endl;
-			cout<<"Number of 32-bit registers per multiprocessor: "<<prop.regsPerBlock<<endl;
-			cout<<"Size of constant memory: "<<prop.totalConstMem<<endl<<endl;
-		}
-
-		dynSharedMemSize = 0;
-		numberOfThreadsPerBlock = 0;
-		numberOfMultiprocessor = prop.multiProcessorCount;
-		cudaCapability = prop.major*100+prop.minor*10;
-
-		if (cudaCapability >= 200)	{
-			uint16_t sumOfCapacity = 0;
-			for (uint8_t i = 0; i < numberOfResources; ++i)
-				sumOfCapacity += capacityOfResources[i];
-
-			cudaData.sumOfCapacities = sumOfCapacity;
-			cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
-
-			numberOfThreadsPerBlock = 512;
-		}	else	{
-			numberOfThreadsPerBlock = 128;
-		}
-
-		// Merge results array.
-		dynSharedMemSize += numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
-
-		if ((numberOfActivities-2)*SWAP_RANGE < USHRT_MAX)
-			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
-		else
-			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint32_t); // merge help array
-
-		dynSharedMemSize += numberOfActivities*sizeof(uint16_t);	// block order
-		dynSharedMemSize += (numberOfResources+1)*sizeof(uint16_t);	// resources indices
-		dynSharedMemSize += numberOfActivities*sizeof(uint8_t);		// duration of activities
-	} else {
-		cudaError = errorHandler(-1);
-	}
-
-	/* COPY SUCCESSORS TO CUDA TEXTURE MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsArray, numOfElSuc*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(-1);
-	}
-	if (!cudaError && cudaMemcpy(cudaSuccessorsArray, linSucArray, numOfElSuc*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(0);
-	}
-	if (!cudaError && bindTexture(cudaSuccessorsArray, numOfElSuc, 1) != cudaSuccess)	{
-		cudaError = errorHandler(0);
-	}
-	/* COPY PREDECESSORS TO CUDA TEXTURE MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaPredecessorsArray, numOfElPred*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(1);
-	}
-	if (!cudaError && cudaMemcpy(cudaPredecessorsArray, linPredArray, numOfElPred*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(2);
-	}
-	if (!cudaError && bindTexture(cudaPredecessorsArray, numOfElPred, 3) != cudaSuccess)	{
-		cudaError = errorHandler(2);
-	}
-	/* COPY ACTIVITIES DURATION TO CUDA */
-	if (!cudaError && cudaMalloc((void**) &cudaData.activitiesDuration, numberOfActivities*sizeof(uint8_t)) != cudaSuccess)	{
-		cudaError = errorHandler(3);
-	}
-	if (!cudaError && cudaMemcpy(cudaData.activitiesDuration, activitiesDuration, sizeof(uint8_t)*numberOfActivities, cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(4);
-	}
-
-	/* COPY SUCCESSORS AND PREDECESSORS INDICES TO TEXTURE MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsIdxsArray, sizeof(uint16_t)*(numberOfActivities+1)) != cudaSuccess)	{
-		cudaError = errorHandler(4);
-	}
-	if (!cudaError && cudaMemcpy(cudaSuccessorsIdxsArray, sucIdxs, sizeof(uint16_t)*(numberOfActivities+1), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(5);
-	}
-	if (!cudaError && bindTexture(cudaSuccessorsIdxsArray, numberOfActivities+1, 2) != cudaSuccess)	{
-		cudaError = errorHandler(5);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaPredecessorsIdxsArray, sizeof(uint16_t)*(numberOfActivities+1)) != cudaSuccess)	{
-		cudaError = errorHandler(6);
-	}
-	if (!cudaError && cudaMemcpy(cudaPredecessorsIdxsArray, predIdxs, sizeof(uint16_t)*(numberOfActivities+1), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(7);
-	}
-	if (!cudaError && bindTexture(cudaPredecessorsIdxsArray, numberOfActivities+1, 4) != cudaSuccess)	{
-		cudaError = errorHandler(7);
 	}
 
 	/* CONVERT ACTIVITIES RESOURCE REQUIREMENTS TO 1D ARRAY */
@@ -257,16 +153,11 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		}
 	}
 
-	/* COPY ACTIVITIES RESOURCE REQUIREMENTS TO TEXTURE MEMORY */
-
-	if (!cudaError && cudaMalloc((void**) &cudaActivitiesResourcesArray, sizeof(uint8_t)*resourceReqSize) != cudaSuccess)	{
-		cudaError = errorHandler(8);
-	}
-	if (!cudaError && cudaMemcpy(cudaActivitiesResourcesArray, reqResLin, sizeof(uint8_t)*resourceReqSize, cudaMemcpyHostToDevice)	!= cudaSuccess)	{
-		cudaError = errorHandler(9);
-	}
-	if (!cudaError && bindTexture(cudaActivitiesResourcesArray, resourceReqSize, 0) != cudaSuccess)	{
-		cudaError = errorHandler(9);
+	/* CONVERT CAPACITIES OF RESOURCES TO 1D ARRAY */
+	uint16_t *resIdxs = new uint16_t[numberOfResources+1];
+	resIdxs[0] = 0;
+	for (uint8_t r = 0; r < numberOfResources; ++r)	{
+		resIdxs[r+1] =  resIdxs[r]+capacityOfResources[r];
 	}
 
 	/* CREATE SUCCESSORS MATRIX + COMPUTE CRITICAL PATH MAKESPAN */
@@ -315,9 +206,83 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	else
 		criticalPathMakespan = -1;
 	
+	/* CREATE INITIAL START SET SOLUTIONS */
+	srand(time(NULL));
+	SolutionInfo *infoAboutSchedules = new SolutionInfo[SOLUTION_SET_SIZE];
+	uint16_t *randomSchedules = new uint16_t[SOLUTION_SET_SIZE*numberOfActivities], *schedWr = randomSchedules;
+
+	// Rewrite to sets.
+	for (uint16_t b = 0; b < SOLUTION_SET_SIZE; ++b)	{
+		makeDiversification(activitiesOrder, successorsMatrix, 100);
+		infoAboutSchedules[b].readCounter = 0;
+		infoAboutSchedules[b].solutionCost = evaluateOrder(activitiesOrder);
+		schedWr = copy(activitiesOrder, activitiesOrder+numberOfActivities, schedWr);
+	}
+
+	/* CUDA INFO + DATA PHASE */
+
+	bool cudaError = false;
+
+	/* SET BASE CONFIG PARAMETERS */
+
+	cudaData.numberOfActivities = numberOfActivities;
+	cudaData.numberOfResources = numberOfResources;
+	cudaData.maxTabuListSize = TABU_LIST_SIZE;
+	cudaData.solutionsSetSize = SOLUTION_SET_SIZE;
+	cudaData.swapRange = SWAP_RANGE;
+	cudaData.maximalValueOfReadCounter = 3;
+	cudaData.numberOfDiversificationSwaps = 20;
+
+	/* GET CUDA INFO - SET NUMBER OF THREADS PER BLOCK */
+
+	int devId = 0;
+	cudaDeviceProp prop;
+	if (cudaGetDevice(&devId) == cudaSuccess && cudaGetDeviceProperties(&prop, devId) == cudaSuccess)	{
+		if (verbose == true)	{
+			cout<<"Device number: "<<devId<<endl;
+			cout<<"Device name: "<<prop.name<<endl;
+			cout<<"Device compute capability: "<<prop.major<<"."<<prop.minor<<endl;
+			cout<<"Number of multiprocessors: "<<prop.multiProcessorCount<<endl;
+			cout<<"Clock rate: "<<prop.clockRate<<endl;
+			cout<<"Size of global memory: "<<prop.totalGlobalMem<<endl;
+			cout<<"Size of shared memory per multiprocessor: "<<prop.sharedMemPerBlock<<endl;
+			cout<<"Number of 32-bit registers per multiprocessor: "<<prop.regsPerBlock<<endl;
+			cout<<"Size of constant memory: "<<prop.totalConstMem<<endl<<endl;
+		}
+
+		cudaCapability = prop.major*100+prop.minor*10;
+		numberOfBlock = prop.multiProcessorCount*NUMBER_OF_BLOCK_PER_MULTIPROCESSOR;
+
+		if (cudaCapability >= 200)	{
+			uint16_t sumOfCapacity = 0;
+			for (uint8_t i = 0; i < numberOfResources; ++i)
+				sumOfCapacity += capacityOfResources[i];
+
+			cudaData.sumOfCapacities = sumOfCapacity;
+			cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
+
+			numberOfThreadsPerBlock = 512;
+		}	else	{
+			numberOfThreadsPerBlock = 256;
+		}
+
+		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
+		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
+
+		if ((numberOfActivities-2)*SWAP_RANGE < USHRT_MAX)
+			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
+		else
+			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint32_t); // merge help array
+
+		dynSharedMemSize += numberOfActivities*sizeof(uint16_t);	// block order
+		dynSharedMemSize += (numberOfResources+1)*sizeof(uint16_t);	// resources indices
+		dynSharedMemSize += numberOfActivities*sizeof(uint8_t);		// duration of activities
+	} else {
+		cudaError = errorHandler(-1);
+	}
+
 	// If is possible to run 2 block (shared memory restriction) then copy successorsMatrix to shared memory.
-	if (dynSharedMemSize+successorsMatrixSize*sizeof(uint8_t) < 8000)	{
-		cout<<"Successors matrix will be copied to shared memory."<<endl;
+	if (dynSharedMemSize+successorsMatrixSize*sizeof(uint8_t) < 7950)	{
 		dynSharedMemSize += successorsMatrixSize*sizeof(uint8_t);
 		cudaData.copySuccessorsMatrixToSharedMemory = true;
 	} else	{
@@ -325,155 +290,162 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 	cudaData.successorsMatrixSize = successorsMatrixSize;
 
-	/* CREATE INITIAL START SET SOLUTIONS */
-	srand(time(NULL));
-	numberOfBlock = numberOfMultiprocessor*NUMBER_OF_BLOCK_PER_MULTIPROCESSOR;
-	SolutionInfo *infoAboutSchedules = new SolutionInfo[SOLUTION_SET_SIZE];
-	uint16_t *randomSchedules = new uint16_t[SOLUTION_SET_SIZE*numberOfActivities], *schedWr = randomSchedules;
-
-	// Rewrite to sets.
-	for (uint16_t b = 0; b < SOLUTION_SET_SIZE; ++b)	{
-		makeDiversification(activitiesOrder, successorsMatrix, 100);
-/*
-		cout<<"Cost before: "<<evaluateOrder(activitiesOrder)<<endl;
-		for (int32_t i = 1; i < numberOfActivities-2; ++i)	{ 
-			uint32_t bestI = i, bestJ = i;
-			uint32_t bestCost = evaluateOrder(activitiesOrder);
-			for (int32_t j = i+1; j < numberOfActivities-1; ++j)   {
-				if (checkSwapPrecedencePenalty(activitiesOrder, successorsMatrix, i,j))	{
-					swap(activitiesOrder[i], activitiesOrder[j]);
-					uint32_t cost = evaluateOrder(activitiesOrder);
-					if (cost < bestCost)	{
-						bestI = i; bestJ = j;
-						bestCost = cost;
-					}
-					swap(activitiesOrder[i], activitiesOrder[j]);
-				}
-			}
-			if (bestI != bestJ)
-				swap(activitiesOrder[bestI], activitiesOrder[bestJ]);
-		}
-		uint16_t * startById = new uint16_t[numberOfActivities];
-		cout<<"Cost after: "<<evaluateOrder(activitiesOrder, NULL, startById)<<endl;
-		cout<<"Penalty after: "<<computePrecedencePenalty(startById)<<endl;
-		delete[] startById; */
-		
-		infoAboutSchedules[b].readCounter = 0;
-		infoAboutSchedules[b].solutionCost = evaluateOrder(activitiesOrder);
-		schedWr = copy(activitiesOrder, activitiesOrder+numberOfActivities, schedWr);
+	if (verbose == true)	{
+		cout<<"Dynamic shared memory requirement: "<<dynSharedMemSize<<endl;
+		cout<<"Number of threads per block: "<<numberOfThreadsPerBlock<<endl<<endl;
 	}
 
-	/* COPY INITIAL SOLUTIONS TO CUDA MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaData.solutionsSetInfo, sizeof(SolutionInfo)*cudaData.solutionsSetSize) != cudaSuccess)	{
-		cudaError = errorHandler(10);
+	/* COPY ACTIVITIES DURATION TO CUDA */
+	if (!cudaError && cudaMalloc((void**) &cudaData.activitiesDuration, numberOfActivities*sizeof(uint8_t)) != cudaSuccess)	{
+		cudaError = errorHandler(-1);
 	}
-	if (!cudaError && cudaMemcpy(cudaData.solutionsSetInfo, infoAboutSchedules, cudaData.solutionsSetSize*sizeof(SolutionInfo), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(11);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.solutionsSet, sizeof(uint16_t)*cudaData.solutionsSetSize*numberOfActivities) != cudaSuccess)	{
-		cudaError = errorHandler(11);
-	}
-	if (!cudaError && cudaMemcpy(cudaData.solutionsSet, randomSchedules, sizeof(int16_t)*cudaData.solutionsSetSize*numberOfActivities, cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(12);
+	if (!cudaError && cudaMemcpy(cudaData.activitiesDuration, activitiesDuration, numberOfActivities*sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(0);
 	}
 
-	uint32_t tabuListsSize = numberOfBlock*cudaData.maxTabuListSize;
-	uint32_t tabuCachesSize = numberOfActivities*numberOfActivities*numberOfBlock;
+	/* COPY PREDECESSORS+INDICES TO CUDA TEXTURE MEMORY */
+	if (!cudaError && cudaMalloc((void**) &cudaPredecessorsArray, numOfElPred*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(0);
+	}
+	if (!cudaError && cudaMemcpy(cudaPredecessorsArray, linPredArray, numOfElPred*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(1);
+	}
+	if (!cudaError && bindTexture(cudaPredecessorsArray, numOfElPred, PREDECESSORS) != cudaSuccess)	{
+		cudaError = errorHandler(1);
+	}
+	if (!cudaError && cudaMalloc((void**) &cudaPredecessorsIdxsArray, (numberOfActivities+1)*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(2);
+	}
+	if (!cudaError && cudaMemcpy(cudaPredecessorsIdxsArray, predIdxs, (numberOfActivities+1)*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(3);
+	}
+	if (!cudaError && bindTexture(cudaPredecessorsIdxsArray, numberOfActivities+1, PREDECESSORS_INDICES) != cudaSuccess)	{
+		cudaError = errorHandler(3);
+	}
 
-	/* COPY TABU LISTS TO CUDA MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaData.tabuLists, tabuListsSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(12);
+	/* COPY SUCCESSORS BIT MATRIX */
+	if (!cudaError && cudaMalloc((void**) &cudaData.successorsMatrix, successorsMatrixSize*sizeof(uint8_t)) != cudaSuccess)	{
+		cudaError = errorHandler(4);
 	}
-	if (!cudaError && cudaMemset(cudaData.tabuLists, 0, tabuListsSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(13);
-	}
-	/* CREATE TABU CACHE */
-	if (!cudaError && cudaMalloc((void**) &cudaData.tabuCaches, tabuCachesSize*sizeof(uint8_t)) != cudaSuccess)	{
-		cudaError = errorHandler(13);
-	}
-	if (!cudaError && cudaMemset(cudaData.tabuCaches, 0, tabuCachesSize*sizeof(uint8_t)) != cudaSuccess)	{
-		cudaError = errorHandler(14);
+	if (!cudaError && cudaMemcpy(cudaData.successorsMatrix, successorsMatrix, successorsMatrixSize*sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(5);
 	}
 
-	/* CONVERT CAPACITIES OF RESOURCES TO 1D ARRAY */
-	uint16_t *resIdxs = new uint16_t[numberOfResources+1];
-	resIdxs[0] = 0;
-	for (uint8_t r = 0; r < numberOfResources; ++r)	{
-		resIdxs[r+1] =  resIdxs[r]+capacityOfResources[r];
+	/* COPY ACTIVITIES RESOURCE REQUIREMENTS TO TEXTURE MEMORY */
+	if (!cudaError && cudaMalloc((void**) &cudaActivitiesResourcesArray, resourceReqSize*sizeof(uint8_t)) != cudaSuccess)	{
+		cudaError = errorHandler(5);
+	}
+	if (!cudaError && cudaMemcpy(cudaActivitiesResourcesArray, reqResLin, resourceReqSize*sizeof(uint8_t), cudaMemcpyHostToDevice)	!= cudaSuccess)	{
+		cudaError = errorHandler(6);
+	}
+	if (!cudaError && bindTexture(cudaActivitiesResourcesArray, resourceReqSize, ACTIVITIES_RESOURCES) != cudaSuccess)	{
+		cudaError = errorHandler(6);
 	}
 
 	/* COPY RESOURCES CAPACITIES TO CUDA MEMORY */
 	if (!cudaError && cudaMalloc((void**) &cudaData.resourceIndices, (numberOfResources+1)*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(14);
+		cudaError = errorHandler(7);
 	}
 	if (!cudaError && cudaMemcpy(cudaData.resourceIndices, resIdxs, (numberOfResources+1)*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(15);
-	}
-	/* CREATE START TIMES ARRAYS */
-/*	if (!cudaError && cudaMalloc((void**) &cudaData.startTimesById, numberOfBlock*numberOfThreadsPerBlock*numberOfActivities*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(15);
-	} */
-	if (!cudaError && cudaMalloc((void**) &cudaData.setStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(16);
-	}
-	/* SET START STATE OF COMMUNICATION */
-	if (!cudaError && cudaMemset(cudaData.setStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(17);
-	}
-	/* BEST CURRENT SOLUTIONS OF THE BLOCKS */
-	if (!cudaError && cudaMalloc((void**) &cudaData.blocksBestSolution, numberOfActivities*numberOfBlock*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(18);
-	}
-	/* ALLOCATE AND INIT HASH MAP */
-	if (!cudaError && cudaMalloc((void**) &cudaData.hashMap, HASH_TABLE_SIZE*sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(19);
-	}
-	if (!cudaError && cudaMemset(cudaData.hashMap, 0, HASH_TABLE_SIZE*sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(20);
-	}
-	/* COPY SUCCESSORS BIT MATRIX */
-	if (!cudaError && cudaMalloc((void**) &cudaData.successorsMatrix, successorsMatrixSize*sizeof(uint8_t)) != cudaSuccess)	{
-		cudaError = errorHandler(20);
-	}
-	if (!cudaError && cudaMemcpy(cudaData.successorsMatrix, successorsMatrix, successorsMatrixSize*sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(21);
-	}
-	/* CREATE SWAP PENALTY FREE MERGE ARRAYS */
-	if (!cudaError && cudaMalloc((void**) &cudaData.swapFreeMergeArray, (numberOfActivities-2)*cudaData.swapRange*sizeof(MoveIndices)*numberOfBlock) != cudaSuccess)	{
-		cudaError = errorHandler(21);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.mergeHelpArray, (numberOfActivities-2)*cudaData.swapRange*sizeof(MoveIndices)*numberOfBlock) != cudaSuccess)	{
-		cudaError = errorHandler(22);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.solutionSetTabuLists, cudaData.solutionsSetSize*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(23);
-	}
-	if (!cudaError && cudaMemset(cudaData.solutionSetTabuLists, 0, cudaData.solutionsSetSize*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(24);
-	}
-	/* GLOBAL BEST SOLUTION OF ALL BLOCKS */
-	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolution, cudaData.numberOfActivities*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(24);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolutionCost, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(25);
-	}
-	if (!cudaError && cudaMemset(cudaData.globalBestSolutionCost, UCHAR_MAX, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(26);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolutionTabuList, cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(26);
-	}
-	if (!cudaError && cudaMemset(cudaData.globalBestSolutionTabuList, 0, cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
-		cudaError = errorHandler(27);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaData.globalStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(27);
-	}
-	if (!cudaError && cudaMemset(cudaData.globalStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
-		cudaError = errorHandler(28);
+		cudaError = errorHandler(8);
 	}
 
+	/* COPY TABU LISTS TO CUDA MEMORY */
+	if (!cudaError && cudaMalloc((void**) &cudaData.tabuLists, numberOfBlock*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(8);
+	}
+	if (!cudaError && cudaMemset(cudaData.tabuLists, 0, numberOfBlock*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(9);
+	}
+
+	/* CREATE TABU CACHE */
+	if (!cudaError && cudaMalloc((void**) &cudaData.tabuCaches, numberOfActivities*numberOfActivities*numberOfBlock*sizeof(uint8_t)) != cudaSuccess)	{
+		cudaError = errorHandler(9);
+	}
+	if (!cudaError && cudaMemset(cudaData.tabuCaches, 0, numberOfActivities*numberOfActivities*numberOfBlock*sizeof(uint8_t)) != cudaSuccess)	{
+		cudaError = errorHandler(10);
+	}
+
+	/* ALLOCATE AND INIT HASH MAP */
+	if (!cudaError && cudaMalloc((void**) &cudaData.hashMap, HASH_TABLE_SIZE*sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(10);
+	}
+	if (!cudaError && cudaMemset(cudaData.hashMap, 0, HASH_TABLE_SIZE*sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(11);
+	}
+
+	/* COPY INITIAL SET SOLUTIONS */
+	if (!cudaError && cudaMalloc((void**) &cudaData.solutionsSet, cudaData.solutionsSetSize*numberOfActivities*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(11);
+	}
+	if (!cudaError && cudaMemcpy(cudaData.solutionsSet, randomSchedules, cudaData.solutionsSetSize*numberOfActivities*sizeof(int16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(12);
+	}
+	if (!cudaError && cudaMalloc((void**) &cudaData.solutionsSetInfo, cudaData.solutionsSetSize*sizeof(SolutionInfo)) != cudaSuccess)	{
+		cudaError = errorHandler(12);
+	}
+	if (!cudaError && cudaMemcpy(cudaData.solutionsSetInfo, infoAboutSchedules, cudaData.solutionsSetSize*sizeof(SolutionInfo), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(13);
+	}
+
+	/* CREATE TABU LISTS FOR SET OF SOLUTIONS */
+	if (!cudaError && cudaMalloc((void**) &cudaData.solutionSetTabuLists, cudaData.solutionsSetSize*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(13);
+	}
+	if (!cudaError && cudaMemset(cudaData.solutionSetTabuLists, 0, cudaData.solutionsSetSize*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(14);
+	}
+
+	/* STATE OF COMMUNICATION FOR A SET OF SOLUTIONS */
+	if (!cudaError && cudaMalloc((void**) &cudaData.setStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(14);
+	}
+	if (!cudaError && cudaMemset(cudaData.setStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(15);
+	}
+
+	/* GLOBAL BEST SOLUTION OF ALL BLOCKS AND COST OF THIS SOLUTION */
+	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolution, numberOfActivities*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(15);
+	}
+	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolutionCost, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(16);
+	}
+	if (!cudaError && cudaMemset(cudaData.globalBestSolutionCost, UCHAR_MAX, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(17);
+	}
+
+	/* TABU LIST OF GLOBAL BEST SOLUTION */
+	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolutionTabuList, cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(17);
+	}
+	if (!cudaError && cudaMemset(cudaData.globalBestSolutionTabuList, 0, cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(18);
+	}
+
+	/* STATE OF COMMUNICATION FOR A GLOBAL BEST SOLUTION */
+	if (!cudaError && cudaMalloc((void**) &cudaData.globalStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(18);
+	}
+	if (!cudaError && cudaMemset(cudaData.globalStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
+		cudaError = errorHandler(19);
+	}
+
+	/* BEST CURRENT SOLUTIONS OF THE BLOCKS */
+	if (!cudaError && cudaMalloc((void**) &cudaData.blocksBestSolution, numberOfActivities*numberOfBlock*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(19);
+	}
+
+	/* CREATE SWAP PENALTY FREE MERGE ARRAYS */
+	if (!cudaError && cudaMalloc((void**) &cudaData.swapFreeMergeArray, (numberOfActivities-2)*cudaData.swapRange*numberOfBlock*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(20);
+	}
+	if (!cudaError && cudaMalloc((void**) &cudaData.mergeHelpArray, (numberOfActivities-2)*cudaData.swapRange*numberOfBlock*sizeof(MoveIndices)) != cudaSuccess)	{
+		cudaError = errorHandler(21);
+	}
+
+
+	/* FREE ALLOCATED TEMPORARY RESOURCES */
 	for (uint32_t i = 0; i < numberOfActivities; ++i)
 		delete[] distanceMatrix[i];
 	delete[] distanceMatrix;
@@ -482,10 +454,8 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	delete[] randomSchedules;
 	delete[] infoAboutSchedules;
 	delete[] reqResLin;
-	delete[] linSucArray;
 	delete[] linPredArray;
 	delete[] predIdxs;
-	delete[] sucIdxs;
 	delete[] activitiesOrder;
 
 	return cudaError;
@@ -494,63 +464,50 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 bool ScheduleSolver::errorHandler(int16_t phase)	{
 	cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 	switch (phase)	{
-		case 28:
-			cudaFree(cudaData.globalStateOfCommunication);
-		case 27:
-			cudaFree(cudaData.globalBestSolutionTabuList);
-		case 26:
-			cudaFree(cudaData.globalBestSolutionCost);
-		case 25:
-			cudaFree(cudaData.globalBestSolution);
-		case 24:
-			cudaFree(cudaData.solutionSetTabuLists);
-		case 23:
-			cudaFree(cudaData.mergeHelpArray);
-		case 22:
-			cudaFree(cudaData.swapFreeMergeArray);
 		case 21:
-			cudaFree(cudaData.successorsMatrix);
+			cudaFree(cudaData.swapFreeMergeArray);
 		case 20:
-			cudaFree(cudaData.hashMap);
-		case 19:
 			cudaFree(cudaData.blocksBestSolution);
+		case 19:
+			cudaFree(cudaData.globalStateOfCommunication);
 		case 18:
+			cudaFree(cudaData.globalBestSolutionTabuList);
 		case 17:
-			cudaFree(cudaData.setStateOfCommunication);
+			cudaFree(cudaData.globalBestSolutionCost);
 		case 16:
-	//		cudaFree(cudaData.startTimesById);
+			cudaFree(cudaData.globalBestSolution);
 		case 15:
-			cudaFree(cudaData.resourceIndices);
+			cudaFree(cudaData.setStateOfCommunication);
 		case 14:
-			cudaFree(cudaData.tabuCaches);
+			cudaFree(cudaData.solutionSetTabuLists);
 		case 13:
-			cudaFree(cudaData.tabuLists);
+			cudaFree(cudaData.solutionsSetInfo);
 		case 12:
 			cudaFree(cudaData.solutionsSet);
 		case 11:
-			cudaFree(cudaData.solutionsSetInfo);
+			cudaFree(cudaData.hashMap);
 		case 10:
-			unbindTexture(0);	// activities resources requirements
+			cudaFree(cudaData.tabuCaches);
 		case 9:
-			cudaFree(cudaActivitiesResourcesArray);
+			cudaFree(cudaData.tabuLists);
 		case 8:
-			unbindTexture(4);	// predecessors indices
+			cudaFree(cudaData.resourceIndices);
 		case 7:
-			cudaFree(cudaPredecessorsIdxsArray);
+			unbindTexture(ACTIVITIES_RESOURCES);
 		case 6:
-			unbindTexture(2);	// successors indices
+			cudaFree(cudaActivitiesResourcesArray);
 		case 5:
-			cudaFree(cudaSuccessorsIdxsArray);
+			cudaFree(cudaData.successorsMatrix);
 		case 4:
-			cudaFree(cudaData.activitiesDuration);
+			unbindTexture(PREDECESSORS_INDICES);
 		case 3:
-			unbindTexture(3);	// predecessors
+			cudaFree(cudaPredecessorsIdxsArray);
 		case 2:
-			cudaFree(cudaPredecessorsArray);
+			unbindTexture(PREDECESSORS);
 		case 1:
-			unbindTexture(1);	// successors
+			cudaFree(cudaPredecessorsArray);
 		case 0:
-			cudaFree(cudaSuccessorsArray);
+			cudaFree(cudaData.activitiesDuration);
 
 		default:
 			break;
@@ -558,14 +515,6 @@ bool ScheduleSolver::errorHandler(int16_t phase)	{
 	return true;
 }
 
-bool cmpTmp(const SolutionInfo& x, const SolutionInfo& y)	{
-	if (x.solutionCost < y.solutionCost)
-		return true;
-	else
-		return false;
-}
-
-#include <map> // !!
 void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxIterToDiversification)	{
 	#ifdef __GNUC__
 	timeval startTime, endTime, diffTime;
@@ -577,67 +526,61 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	QueryPerformanceCounter(&startTimeStamp);
 	#endif
 
-	/* START TO SEARCH BEST SOLUTION */
-
-	cout<<"sharedMemSize: "<<dynSharedMemSize<<endl;
-	cout<<"Number of threads: "<<numberOfThreadsPerBlock<<endl;
-
-	cudaData.maximalValueOfReadCounter = 3;
-	cudaData.numberOfDiversificationSwaps = 20;
+	// Set iterations parameters.
 	cudaData.numberOfIterationsPerBlock = maxIter;
 	cudaData.maximalIterationsSinceBest = maxIterToDiversification;
-	
+
+	/* RUN CUDA RCPSP SOLVER */
+
 	runCudaSolveRCPSP(numberOfBlock, numberOfThreadsPerBlock, cudaCapability, dynSharedMemSize, cudaData);
 
-	/* FIND BEST BLOCK SOLUTION */
+	/* GET BEST FOUND SOLUTION */
 
-	cout<<"sizeof(MoveIndices): "<<sizeof(MoveIndices)<<endl;
-	// !!!!
 	bool cudaError = false;
 	uint32_t bestGlobalCost;
 	if (!cudaError && cudaMemcpy(&bestGlobalCost, cudaData.globalBestSolutionCost, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
-	if (!cudaError && cudaMemcpy(bestScheduleOrder, cudaData.globalBestSolution, sizeof(uint16_t)*numberOfActivities, cudaMemcpyDeviceToHost) != cudaSuccess)	{
+	if (!cudaError && cudaMemcpy(bestScheduleOrder, cudaData.globalBestSolution, numberOfActivities*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
-	if (!cudaError)	{
-		if (bestGlobalCost < 0xffffffff)	{
-			solutionComputed = true;
-		}
-		cout<<"Cuda best cost: "<<bestGlobalCost<<endl;
+	if (!cudaError && bestGlobalCost < 0xffffffff)	{
+		solutionComputed = true;
 	}
 
 	if (cudaError)	{
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
 	}
 
-/*
+	/* PRINT TABU HASH STATISTICS IF DEBUG MODE IS ON */
+	#if DEBUG_TABU_HASH == 1
 	uint32_t *hashMap = new uint32_t[HASH_TABLE_SIZE];
-	cudaMemcpy(hashMap, cudaData.hashMap, sizeof(uint32_t)*HASH_TABLE_SIZE, cudaMemcpyDeviceToHost);
-	
-	map<uint32_t,uint32_t> counters;                                                                                                                                                                                      
-	for (uint32_t i = 0; i < HASH_TABLE_SIZE; ++i)  {                                                                                                                                                                     
-		counters[hashMap[i]]++;
-	}
-
-	uint64_t numberCollision = 0, numberCorrect = 0;                                                                                                                                                                      
-	for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)  {                                                                                                                     
-		cout<<it->first<<": "<<it->second<<endl;                                                                                                                                                                          
-		if (it->first > 1)  {                                                                                                                                                                                             
-			numberCollision += it->first*it->second;                                                                                                                                                                      
-		} else if (it->first == 1)  {                                                                                                                                                                                     
-			numberCorrect = it->second;
+	if (cudaMemcpy(hashMap, cudaData.hashMap, sizeof(uint32_t)*HASH_TABLE_SIZE, cudaMemcpyDeviceToHost) == cudaSuccess)	{
+		map<uint32_t,uint32_t> counters;
+		for (uint32_t i = 0; i < HASH_TABLE_SIZE; ++i)  {
+			counters[hashMap[i]]++;
 		}
+
+		uint64_t numberCollision = 0, numberCorrect = 0;
+		for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)  {
+			cout<<it->first<<": "<<it->second<<endl;
+			if (it->first > 1)  {
+				numberCollision += it->first*it->second;
+			} else if (it->first == 1)  {
+				numberCorrect = it->second;
+			}
+		}
+
+		cout<<"Number of permutation: "<<numberCollision+numberCorrect<<endl;
+		cout<<"Correct/collision permutation: "<<numberCorrect<<"/"<<numberCollision<<endl;
+		cout<<"Total accuracy: "<<numberCorrect/((double) numberCollision+numberCorrect)<<endl<<endl;
+	} else {
+		cerr<<"Cannot copy tabu hash from device memory!"<<endl<<endl;;
 	}
-
-	cout<<"Number of permutation: "<<numberCollision+numberCorrect<<endl;                                                                                                                                                 
-	cout<<"Correct/collision permutation: "<<numberCorrect<<"/"<<numberCollision<<endl;                                                                                                                                   
-	cout<<"Total accuracy: "<<numberCorrect/((double) numberCollision+numberCorrect)<<endl;
-
-	delete[] hashMap; */
+	delete[] hashMap;
+	#endif
 
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);
@@ -764,31 +707,28 @@ void ScheduleSolver::printBestSchedule(bool verbose, ostream& OUT)	const	{
 }
 
 void ScheduleSolver::freeCudaMemory()	{
-	for (int i = 0; i < 5; ++i)
+	for (int i = 0; i < 3; ++i)
 		unbindTexture(i);
-	cudaFree(cudaData.mergeHelpArray);
 	cudaFree(cudaData.activitiesDuration);
-	cudaFree(cudaSuccessorsArray);
 	cudaFree(cudaPredecessorsArray);
-	cudaFree(cudaSuccessorsIdxsArray);
 	cudaFree(cudaPredecessorsIdxsArray);
-	cudaFree(cudaActivitiesResourcesArray);
 	cudaFree(cudaData.successorsMatrix);
-	cudaFree(cudaData.solutionsSetInfo);
-	cudaFree(cudaData.solutionsSet);
+	cudaFree(cudaActivitiesResourcesArray);
+	cudaFree(cudaData.resourceIndices);
 	cudaFree(cudaData.tabuLists);
 	cudaFree(cudaData.tabuCaches);
-	cudaFree(cudaData.resourceIndices);
-//	cudaFree(cudaData.startTimesById);
-	cudaFree(cudaData.setStateOfCommunication);
-	cudaFree(cudaData.blocksBestSolution);
 	cudaFree(cudaData.hashMap);
-	cudaFree(cudaData.swapFreeMergeArray);
+	cudaFree(cudaData.solutionsSet);
+	cudaFree(cudaData.solutionsSetInfo);
 	cudaFree(cudaData.solutionSetTabuLists);
+	cudaFree(cudaData.setStateOfCommunication);
 	cudaFree(cudaData.globalBestSolution);
 	cudaFree(cudaData.globalBestSolutionCost);
 	cudaFree(cudaData.globalBestSolutionTabuList);
 	cudaFree(cudaData.globalStateOfCommunication);
+	cudaFree(cudaData.blocksBestSolution);
+	cudaFree(cudaData.swapFreeMergeArray);
+	cudaFree(cudaData.mergeHelpArray);
 }
 
 ScheduleSolver::~ScheduleSolver()	{

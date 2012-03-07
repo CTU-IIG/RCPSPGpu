@@ -10,8 +10,6 @@ using std::cout;
 using std::endl;
 
 texture<uint8_t,1,cudaReadModeElementType> cudaActivitiesResourcesTex;
-texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsTex;
-texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsIndicesTex;
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsTex;
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsIndicesTex;
 
@@ -19,15 +17,11 @@ texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsIndicesTex;
 
 int bindTexture(void *texData, int32_t arrayLength, int option)	{
 	switch (option)	{
-		case 0:
+		case ACTIVITIES_RESOURCES:
 			return cudaBindTexture(NULL, cudaActivitiesResourcesTex, texData, arrayLength*sizeof(uint8_t));
-		case 1:
-			return cudaBindTexture(NULL, cudaSuccessorsTex, texData, arrayLength*sizeof(uint16_t));
-		case 2:
-			return cudaBindTexture(NULL, cudaSuccessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
-		case 3:
+		case PREDECESSORS:
 			return cudaBindTexture(NULL, cudaPredecessorsTex, texData, arrayLength*sizeof(uint16_t));
-		case 4:
+		case PREDECESSORS_INDICES:
 			return cudaBindTexture(NULL, cudaPredecessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
 		default:
 			cerr<<"bindTextures: Invalid option!"<<endl;
@@ -37,15 +31,11 @@ int bindTexture(void *texData, int32_t arrayLength, int option)	{
 
 int unbindTexture(int option)	{
 	switch (option)	{
-		case 0:
+		case ACTIVITIES_RESOURCES:
 			return cudaUnbindTexture(cudaActivitiesResourcesTex);
-		case 1:
-			return cudaUnbindTexture(cudaSuccessorsTex);
-		case 2:
-			return cudaUnbindTexture(cudaSuccessorsIndicesTex);
-		case 3:
+		case PREDECESSORS:
 			return cudaUnbindTexture(cudaPredecessorsTex);
-		case 4:
+		case PREDECESSORS_INDICES:
 			return cudaUnbindTexture(cudaPredecessorsIndicesTex);
 		default:
 			cerr<<"unbindTextures: Invalid option!"<<endl;
@@ -702,7 +692,6 @@ void runCudaSolveRCPSP(int numberOfBlock, int numberOfThreadsPerBlock, int compu
 		// Prefare 16 kB shared memory + 48 kB cache L1.
 		cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
 	}
-	cout<<"Dynamic memory: "<<dynSharedMemSize<<endl;
 	cudaSolveRCPSP<<<numberOfBlock,numberOfThreadsPerBlock,dynSharedMemSize>>>(cudaData);
 }
 

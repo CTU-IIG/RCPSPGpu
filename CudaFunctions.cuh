@@ -4,6 +4,12 @@
 #include <cuda.h>
 #include <stdint.h>
 
+enum TextureName	{
+	ACTIVITIES_RESOURCES = 0,
+	PREDECESSORS = 1,
+	PREDECESSORS_INDICES = 2
+};
+
 struct MoveIndices	{
 	int16_t i;
 	int16_t j;
@@ -21,18 +27,28 @@ struct MoveInfo	{
 };
 
 struct CudaData {
-	int16_t numberOfActivities;	// OK
+	int16_t numberOfActivities;
 	int16_t numberOfResources;	// OK
 
-	uint32_t swapRange;	// OK
-	uint16_t sumOfCapacities;	// OK
-	uint8_t maximalCapacityOfResource;	// OK
+	uint16_t swapRange;
+	uint16_t sumOfCapacities;
+	uint8_t maximalCapacityOfResource;
 	uint32_t numberOfIterationsPerBlock;	// OK
 	uint32_t maximalIterationsSinceBest;	// OK
+
+	uint8_t *activitiesDuration;	// OK
+
+	uint8_t *successorsMatrix;		// OK
+	uint32_t successorsMatrixSize;	// OK
+	bool copySuccessorsMatrixToSharedMemory;	// OK
+
+	uint16_t *resourceIndices;	// OK
 
 	int32_t maxTabuListSize;	// OK
 	MoveIndices *tabuLists;		// OK
 	uint8_t *tabuCaches;	// OK
+
+	uint32_t *hashMap; // OK
 
 	int32_t solutionsSetSize;	// OK
 	uint16_t *solutionsSet;		// OK
@@ -47,18 +63,8 @@ struct CudaData {
 
 	uint16_t *blocksBestSolution;	//	OK
 	
-	uint8_t *activitiesDuration;	// OK
-
-	uint8_t *successorsMatrix;		// OK
-	uint32_t successorsMatrixSize;	// OK
-	bool copySuccessorsMatrixToSharedMemory;	// OK
-	
 	MoveIndices *mergeHelpArray;	// OK
 	MoveIndices *swapFreeMergeArray;	// OK
-
-	uint16_t *resourceIndices;	// OK
-
-	uint32_t *hashMap; // OK
 
 	uint32_t maximalValueOfReadCounter;
 	uint32_t numberOfDiversificationSwaps;

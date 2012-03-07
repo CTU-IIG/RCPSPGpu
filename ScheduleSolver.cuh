@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "CudaFunctions.cuh"
 
+#define DEBUG_TABU_HASH 0
+
 class ScheduleSolver {
 	public:
 		ScheduleSolver(uint8_t resNum, uint8_t *capRes, uint16_t actNum, uint8_t *actDur, uint16_t **actSuc, uint16_t *actNumSuc, uint8_t **actRes, bool verbose = false);
@@ -73,8 +75,6 @@ class ScheduleSolver {
 		uint32_t numberOfThreadsPerBlock;
 
 		uint8_t *cudaActivitiesResourcesArray;
-		uint16_t *cudaSuccessorsArray;
-		uint16_t *cudaSuccessorsIdxsArray;
 		uint16_t *cudaPredecessorsArray;	
 		uint16_t *cudaPredecessorsIdxsArray;
 
