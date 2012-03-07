@@ -19,7 +19,7 @@ using namespace std;
 int rcpspGpu(int argc, char* argv[]);
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
-// Trick how can be entry point of the program ,,renamed'' from main to rcpsp. (for purposes of documentation - Doxygen)
+// Trick how can be entry point of the program ,,renamed'' from main to rcpspGpu. (for purposes of documentation - Doxygen)
 int main(int argc, char* argv[])	{
 	return rcpspGpu(argc,argv);
 }

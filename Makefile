@@ -1,4 +1,15 @@
-# Pokud chcete ladit vykonost, pouzijte volbu -pg (gprof).
+# Default C++ compiler.
+CPP=g++
+# Nvidia Cuda compiler.
+NVCC=nvcc
+
+INST_PATH = /usr/local/bin/
+
+OBJ = ConfigureRCPSP.o InputReader.o SourcesLoad.o ScheduleSolver.o CudaFunctions.o
+INC = ConfigureRCPSP.h CudaConstants.h DefaultConfigureRCPSP.h InputReader.h SourcesLoad.h ScheduleSolver.cuh CudaFunctions.cuh
+SRC = ConfigureRCPSP.cpp CreateHeaderFile.cpp InputReader.cpp RCPSPGpu.cpp SourcesLoad.cpp ScheduleSolver.cu CudaFunctions.cu
+
+# If yout want to analyse performance then switch -pg (gprof) should be used. Static linkage of standard C++ library (-static-libstdc++).
 ifdef DEBUG
 OPTIMISATION = --debug -G3 -O0
 else
@@ -8,16 +19,45 @@ endif
 CAPABILITY = --generate-code arch=compute_20,code=sm_21 --maxrregcount=32
 GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe
 
-# Defaultní volba pro příkaz make.
+# Compile all.
 build: CreateHeaderFile RCPSPGpu
 
-# Zkompiluje program.
-CreateHeaderFile:
-	nvcc $(CAPABILITY) $(OPTIMISATION) -o CreateHeaderFile CreateHeaderFile.cpp InputReader.cpp --compiler-options $(GCC_OPTIONS)
+# Compile CreateHeaderFile program.
+CreateHeaderFile: $(OBJ) CreateHeaderFile.o
+	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) -o $@ $(OBJ) CreateHeaderFile.o
 
-RCPSPGpu:
-	nvcc $(CAPABILITY) $(OPTIMISATION) --ptxas-options=-v -o RCPSPGpu RCPSPGpu.cpp ConfigureRCPSP.cpp InputReader.cpp ScheduleSolver.cu SourcesLoad.cpp CudaFunctions.cu --compiler-options $(GCC_OPTIONS)
+#c Compile RCPSPGpu program.
+RCPSPGpu: $(OBJ) RCPSPGpu.o
+	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) -o $@ $(OBJ) RCPSPGpu.o
 
+# Compile *.cpp files to objects.
+%.o: %.cpp
+	$(CPP) -O2 -march=native -Wall -pedantic -pipe -c -o $@ $<
+
+# Compile *.cu files to objects.
+%.o: %.cu
+	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) --ptxas-options=-v -c -o $@ $<
+
+# Dependencies among header files and object files.
+${OBJ}: ${INC}
+
+# Install programs.
+install: build
+	cp CreateHeaderFile $(INST_PATH);	\
+	cp RCPSPGpu $(INST_PATH)
+
+# Uninstall programs.
+uninstall:
+	rm -f $(INST_PATH)CreateHeaderFile;	\
+	rm -f $(INST_PATH)RCPSPGpu
+
+# Remove programs and temporary files.
 clean:
+	rm -f *.o
 	rm -f CreateHeaderFile RCPSPGpu
+
+# Create tarball from the project files.
+distrib:
+	tar -c $(SRC) $(INC) Makefile > RCPSPGpu.tar; \
+	bzip2 RCPSPGpu.tar
 

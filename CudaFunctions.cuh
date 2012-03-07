@@ -1,7 +1,6 @@
 #ifndef HLIDAC_PES_CUDA_FUNCTIONS_CUH
 #define HLIDAC_PES_CUDA_FUNCTIONS_CUH
 
-#include <cuda.h>
 #include <stdint.h>
 
 enum TextureName	{

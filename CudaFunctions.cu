@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <iostream>
+#include <cuda.h>
 #include <curand_kernel.h>
 #include "ConfigureRCPSP.h"
 #include "CudaConstants.h"
