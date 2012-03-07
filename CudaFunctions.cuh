@@ -28,43 +28,43 @@ struct MoveInfo	{
 
 struct CudaData {
 	int16_t numberOfActivities;
-	int16_t numberOfResources;	// OK
+	int8_t numberOfResources;
 
 	uint16_t swapRange;
 	uint16_t sumOfCapacities;
 	uint8_t maximalCapacityOfResource;
-	uint32_t numberOfIterationsPerBlock;	// OK
-	uint32_t maximalIterationsSinceBest;	// OK
+	uint32_t numberOfIterationsPerBlock;
+	uint32_t maximalIterationsSinceBest;
 
-	uint8_t *activitiesDuration;	// OK
+	uint8_t *activitiesDuration;
 
-	uint8_t *successorsMatrix;		// OK
-	uint32_t successorsMatrixSize;	// OK
-	bool copySuccessorsMatrixToSharedMemory;	// OK
+	uint8_t *successorsMatrix;
+	uint32_t successorsMatrixSize;
+	bool copySuccessorsMatrixToSharedMemory;
 
-	uint16_t *resourceIndices;	// OK
+	uint16_t *resourceIndices;
 
-	int32_t maxTabuListSize;	// OK
-	MoveIndices *tabuLists;		// OK
-	uint8_t *tabuCaches;	// OK
+	uint32_t maxTabuListSize;
+	MoveIndices *tabuLists;
+	uint8_t *tabuCaches;
 
-	uint32_t *hashMap; // OK
+	uint32_t *hashMap;
 
-	int32_t solutionsSetSize;	// OK
-	uint16_t *solutionsSet;		// OK
-	MoveIndices *solutionSetTabuLists;	// OK
-	SolutionInfo *solutionsSetInfo;	// OK
-	uint32_t *setStateOfCommunication;	// OK
+	uint32_t solutionsSetSize;
+	uint16_t *solutionsSet;
+	MoveIndices *solutionSetTabuLists;
+	SolutionInfo *solutionsSetInfo;
+	uint32_t *setStateOfCommunication;
 
-	uint16_t *globalBestSolution;	// OK
-	uint32_t *globalBestSolutionCost;	// OK
-	MoveIndices *globalBestSolutionTabuList;	// OK
-	uint32_t *globalStateOfCommunication;	// OK
+	uint16_t *globalBestSolution;
+	uint32_t *globalBestSolutionCost;
+	MoveIndices *globalBestSolutionTabuList;
+	uint32_t *globalStateOfCommunication;
 
-	uint16_t *blocksBestSolution;	//	OK
+	uint16_t *blocksBestSolution;
 	
-	MoveIndices *mergeHelpArray;	// OK
-	MoveIndices *swapFreeMergeArray;	// OK
+	MoveIndices *mergeHelpArray;
+	MoveIndices *swapFreeMergeArray;
 
 	uint32_t maximalValueOfReadCounter;
 	uint32_t numberOfDiversificationSwaps;
