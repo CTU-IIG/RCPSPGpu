@@ -4,7 +4,7 @@
 
 using namespace std;
 
-SourcesLoad::SourcesLoad(const uint8_t numRes, uint8_t *capRes) : numberOfResources(numRes), capacityOfResources(capRes)	{
+SourcesLoad::SourcesLoad(const uint8_t& numRes, const uint8_t * const& capRes) : numberOfResources(numRes), capacityOfResources(capRes)	{
 	uint8_t maxCapacity = 0;
 	resourcesLoad = new uint16_t*[numberOfResources];
 
@@ -16,21 +16,19 @@ SourcesLoad::SourcesLoad(const uint8_t numRes, uint8_t *capRes) : numberOfResour
 
 	startValues = new uint16_t[maxCapacity];
 	memset(startValues, 0, sizeof(uint16_t)*maxCapacity);
-	reqItems = new uint16_t[maxCapacity];
-	memset(reqItems, 0, sizeof(uint16_t)*maxCapacity);
 }
 
-uint16_t SourcesLoad::getEarliestStartTime(uint8_t *activityResourceRequirement)	const 	{
+uint16_t SourcesLoad::getEarliestStartTime(const uint8_t * const& activityResourceRequirement)	const 	{
 	uint16_t bestStart = 0;
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
 		uint8_t activityRequirement = activityResourceRequirement[resourceId];
 		if (activityRequirement > 0)
-			bestStart = max(resourcesLoad[resourceId][activityRequirement-1], bestStart);
+			bestStart = max(resourcesLoad[resourceId][capacityOfResources[resourceId]-activityRequirement], bestStart);
 	}
 	return bestStart;
 }
 
-void SourcesLoad::addActivity(uint16_t activityStart, uint16_t activityStop, uint8_t *activityRequirement)	{
+void SourcesLoad::addActivity(const uint16_t& activityStart, const uint16_t& activityStop, const uint8_t * const& activityRequirement)	{
 	#if DEBUG_SOURCES == 1
 	map<uint16_t,int16_t*>::iterator mit;
 	if ((mit = peaks.find(activityStart)) == peaks.end())	{
@@ -54,74 +52,50 @@ void SourcesLoad::addActivity(uint16_t activityStart, uint16_t activityStop, uin
 		for (uint16_t idx = 0; idx < numberOfResources; ++idx)
 			peak[idx] += activityRequirement[idx];
 	}
+	
+	uint16_t **resourcesLoadCopy = new uint16_t*[numberOfResources];
+	for (uint8_t i = 0; i < numberOfResources; ++i)	{
+		resourcesLoadCopy[i] = new uint16_t[capacityOfResources[i]];
+		for (uint8_t j = 0; j < capacityOfResources[i]; ++j)
+			resourcesLoadCopy[i][j] = resourcesLoad[i][j];
+	}	
 	#endif
 
-	bool writeValue, workDone;
-	uint16_t sourceReq, curLoad, idx;
+	int32_t requiredSquares, timeDiff;
+	uint32_t k, c, capacityOfResource, resourceRequirement, baseResourceIdx, startTimePreviousUnit, newStartTime;
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
-		sourceReq = activityRequirement[resourceId];
-		for (uint8_t capIdx = capacityOfResources[resourceId]; capIdx > 0; --capIdx)	{
-			curLoad = resourcesLoad[resourceId][capIdx-1];
-			if (sourceReq > 0)	{
-				if (curLoad <= activityStart)	{
-					resourcesLoad[resourceId][capIdx-1] = activityStop;
-					--sourceReq;
-					idx = 0;
-					while (startValues[idx] != 0)	{
-						if (reqItems[idx] > 0)
-							--reqItems[idx];
-						++idx;
-					}
-				} else if (curLoad < activityStop)	{
-					resourcesLoad[resourceId][capIdx-1] = activityStop;
-					--sourceReq;
-					idx = 0;
-					writeValue = true;
-					while (startValues[idx] != 0)	{
-						if (startValues[idx] > curLoad && reqItems[idx] > 0)
-							--reqItems[idx];
-						if (startValues[idx] == curLoad)
-							writeValue = false;
-						++idx;
-					}
-					if (writeValue == true && curLoad > 0)	{
-						startValues[idx] = curLoad;
-						reqItems[idx] = activityRequirement[resourceId];
-					}
+		capacityOfResource = capacityOfResources[resourceId];
+		resourceRequirement = activityRequirement[resourceId];
+		requiredSquares = resourceRequirement*(activityStop-activityStart);
+		if (requiredSquares > 0)	{
+			baseResourceIdx = capacityOfResource-resourceRequirement;
+			startTimePreviousUnit = ((resourceRequirement < capacityOfResource) ? resourcesLoad[resourceId][baseResourceIdx-1] : activityStop);
+			newStartTime = min((uint32_t) activityStop, startTimePreviousUnit);
+			if (activityStart < startTimePreviousUnit)	{
+				for (k = baseResourceIdx; k < capacityOfResource; ++k)	{
+					resourcesLoad[resourceId][k] = newStartTime; 
 				}
-			} else {
-				idx = 0;
-				workDone = true;
-				while (startValues[idx] != 0)	{
-					if (reqItems[idx] != 0)	{
-						workDone = false;
+				requiredSquares -= resourceRequirement*(newStartTime-activityStart); 
+			}
+			c = 0; k = 0;
+			newStartTime = activityStop;
+			while (requiredSquares > 0 && k < capacityOfResource)	{
+				if (resourcesLoad[resourceId][k] < newStartTime)    {
+					if (c >= resourceRequirement)
+						newStartTime = startValues[c-resourceRequirement];
+					timeDiff = newStartTime-max(resourcesLoad[resourceId][k],activityStart);
+					if (requiredSquares-timeDiff > 0)	{
+						requiredSquares -= timeDiff;
+						startValues[c++] = resourcesLoad[resourceId][k];
+						resourcesLoad[resourceId][k] = newStartTime; 
+					} else {
+						resourcesLoad[resourceId][k] = newStartTime-timeDiff+requiredSquares; 
 						break;
 					}
-					++idx;
 				}
-				if (workDone == true)	{
-					break;
-				} else {
-					writeValue = true;
-					resourcesLoad[resourceId][capIdx-1] = startValues[idx];
-					idx = 0;
-					while (startValues[idx] != 0)	{
-						if (curLoad < startValues[idx] && reqItems[idx] > 0)
-							--reqItems[idx];
-						if (curLoad == startValues[idx])
-							writeValue = false;
-						++idx;
-					}
-					if (writeValue == true && curLoad > activityStart)	{
-						startValues[idx] = curLoad;
-						reqItems[idx] = activityRequirement[resourceId];
-					}
-				}
+				++k;
 			}
 		}
-		idx = 0;
-		while (startValues[idx] != 0)
-			startValues[idx++] = 0;
 	}
 
 	#if DEBUG_SOURCES == 1
@@ -162,7 +136,6 @@ void SourcesLoad::addActivity(uint16_t activityStart, uint16_t activityStop, uin
 
 			++it1; ++it2;
 		}
-		reverse(startTimes, startTimes+capacityOfResource);
 
 		bool correct = true;
 		for (uint8_t j = 0; j < capacityOfResource; ++j)	{
@@ -174,6 +147,13 @@ void SourcesLoad::addActivity(uint16_t activityStart, uint16_t activityStop, uin
 
 		if (!correct)	{
 			cerr<<"Resource id: "<<resourceId<<endl;
+			cerr<<"activity times: "<<activityStart<<" "<<activityStop<<endl;
+			cerr<<"activity requirement: "<<activityRequirement[resourceId]<<endl;
+			cerr<<"Original start times vector: "<<endl;
+			for (uint8_t i = 0; i < capacityOfResource; ++i)	{
+				cerr<<" "<<resourcesLoadCopy[resourceId][i];
+			}
+			cerr<<endl;
 			cerr<<"Probably correct result: "<<endl;
 			for (uint8_t i = 0; i < capacityOfResource; ++i)	{
 				cerr<<" "<<startTimes[i];
@@ -192,12 +172,16 @@ void SourcesLoad::addActivity(uint16_t activityStart, uint16_t activityStop, uin
 	for (vector<int16_t*>::const_iterator it = cum.begin(); it != cum.end(); ++it)
 		delete[] *it;
 	delete[] currentLoad;
+
+	for (uint8_t i = 0; i < numberOfResources; ++i)
+		delete[] resourcesLoadCopy[i];
+	delete[] resourcesLoadCopy;
 	#endif
 }
 
 void SourcesLoad::printCurrentState(ostream& OUT)	const	{
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
-		OUT<<"Resource "<<resourceId+1<<":";
+		OUT<<"Resource "<<(uint16_t) resourceId+1<<":";
 		for (uint8_t capIdx = 0; capIdx < capacityOfResources[resourceId]; ++capIdx)	
 			OUT<<" "<<resourcesLoad[resourceId][capIdx];
 		OUT<<endl;
@@ -209,7 +193,6 @@ SourcesLoad::~SourcesLoad()	{
 		delete[] *ptr;
 	delete[] resourcesLoad;
 	delete[] startValues;
-	delete[] reqItems;
 	#if DEBUG_SOURCES == 1
 	for (map<uint16_t,int16_t*>::const_iterator mit = peaks.begin(); mit != peaks.end(); ++mit)
 		delete[] mit->second;
