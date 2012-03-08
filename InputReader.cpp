@@ -208,6 +208,8 @@ void InputReader::readFromStream(istream& IN) {
 		} else {
 			throw runtime_error("InputReader::readFromStream: Empty instance file??");
 		}
+	} else {
+		throw runtime_error("InputReader::readFromStream: Parameter have to be file, not directory!"); 
 	}
 
 	// Check if resources are sufficient for activities.

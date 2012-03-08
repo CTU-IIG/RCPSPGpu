@@ -819,8 +819,13 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 void runCudaSolveRCPSP(int numberOfBlock, int numberOfThreadsPerBlock, int computeCapability, int dynSharedMemSize, const CudaData& cudaData)	{
 	if (computeCapability >= 200)	{
-		// Prefare 16 kB shared memory + 48 kB cache L1.
-		cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
+		if (dynSharedMemSize < 7950)	{
+			// Prefare 16 kB shared memory + 48 kB cache L1.
+			cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
+		} else {
+			// Prefare 48 kB shared memory + 16 kB cache L1.
+			cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferShared);
+		}
 	}
 	cudaSolveRCPSP<<<numberOfBlock,numberOfThreadsPerBlock,dynSharedMemSize>>>(cudaData);
 }

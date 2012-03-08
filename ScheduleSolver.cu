@@ -261,17 +261,20 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		cudaCapability = prop.major*100+prop.minor*10;
 		numberOfBlock = prop.multiProcessorCount*ConfigureRCPSP::NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR;
 
+		uint16_t sumOfCapacity = 0;
+		for (uint8_t i = 0; i < numberOfResources; ++i)
+			sumOfCapacity += capacityOfResources[i];
+
+		cudaData.sumOfCapacities = sumOfCapacity;
+		cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
+
 		if (cudaCapability >= 200)	{
-			uint16_t sumOfCapacity = 0;
-			for (uint8_t i = 0; i < numberOfResources; ++i)
-				sumOfCapacity += capacityOfResources[i];
-
-			cudaData.sumOfCapacities = sumOfCapacity;
-			cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
-
 			numberOfThreadsPerBlock = 512;
-		}	else	{
-			numberOfThreadsPerBlock = 256;
+		} else	{
+			if (numberOfActivities > 256)
+				numberOfThreadsPerBlock = 512;
+			else
+				numberOfThreadsPerBlock = 256;
 		}
 
 		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
