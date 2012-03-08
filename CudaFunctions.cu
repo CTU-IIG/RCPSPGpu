@@ -1,3 +1,9 @@
+/*!
+ * \file CudaFunctions.cu
+ * \author Libor Bukata
+ * \brief RCPSP Cuda functions.
+ */
+
 #include <cstdio>
 #include <iostream>
 #include <cuda.h>
@@ -10,8 +16,11 @@ using std::cerr;
 using std::cout;
 using std::endl;
 
+//! Texture reference of activities resource requirements.
 texture<uint8_t,1,cudaReadModeElementType> cudaActivitiesResourcesTex;
+//! Texture reference of predecessors.
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsTex;
+//! Texture referece of predecessors indices.
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsIndicesTex;
 
 /* CUDA BIND TEXTURES */
@@ -47,6 +56,13 @@ int unbindTexture(int option)	{
 
 /*	CUDA IMPLEMENT OF SOURCES LOAD */
 
+/*!
+ * \param cudaData RCPSP constants, variables, ...
+ * \param resourcesLoad Array of the earliest resource start times.
+ * \param startValue Helper array for resource evaluation.
+ * \param startTimesById Array of start times of the scheduled activities.
+ * \brief Prepare arrays for next use (schedule evaluation).
+ */
 inline __device__ void cudaPrepareArrays(const CudaData& cudaData, uint16_t *& resourcesLoad, uint16_t *& startValues, uint16_t *& startTimesById)	{
 	for (uint16_t i = 0; i < cudaData.sumOfCapacities; ++i)
 		resourcesLoad[i] = 0;
@@ -56,6 +72,14 @@ inline __device__ void cudaPrepareArrays(const CudaData& cudaData, uint16_t *& r
 		startTimesById[i] = 0;
 }
 
+/*!
+ * \param numberOfResources Number of resources.
+ * \param activityId Activity identification.
+ * \param resourcesLoad Array of the earliest resource start times.
+ * \param resourceIndices Access indices for resources.
+ * \return Earliest start time of an activity.
+ * \brief Function return earliest possible start time of an activity. Precedence relations are ignored.
+ */
 inline __device__ uint16_t cudaGetEarliestStartTime(const uint16_t& numberOfResources, const uint16_t& activityId, uint16_t *&resourcesLoad, uint16_t *&resourceIndices) {
 	uint16_t bestStart = 0;
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
@@ -66,6 +90,16 @@ inline __device__ uint16_t cudaGetEarliestStartTime(const uint16_t& numberOfReso
 	return bestStart;
 }
 
+/*!
+ * \param activityId Activity identification.
+ * \param activityStart Start time of an activity.
+ * \param activityStop Stop time of an activity.
+ * \param numberOfResources Number of resources.
+ * \param resourceIndices Access indices for resources.
+ * \param resourcesLoad Array of the earliest resource start times.
+ * \param startValue Helper array for resource evaluation.
+ * \brief Function add new activity and update resources arrays. Irreversible process.
+ */
 inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_t& activityStart, const uint16_t& activityStop,
 		const uint16_t& numberOfResources, uint16_t *&resourceIndices,  uint16_t *&resourcesLoad, uint16_t *&startValues)	{
 	
@@ -111,23 +145,38 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
 
 /* CUDA IMPLEMENT OF BASE SCHEDULE SOLVER FUNCTIONS */
 
+/*!
+ * \param cudaData RCPSP constants, variables, ...
+ * \param blockOrder Current order of the activities.
+ * \param indexI Swap index i.
+ * \param indexJ Swap index j.
+ * \param activitiesDuration Duration of the activities.
+ * \param resourceIndices Access indices for resources.
+ * \param resourcesLoad Array of the earliest resource start times.
+ * \param startValue Helper array for resource evaluation.
+ * \param startTimesById Array of start times of the scheduled activities ordered by ID's.
+ * \return Schedule length without any penalties.
+ * \brief Function evaluate schedule and return total schedule length.
+ */
 __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration,
 		 uint16_t *&resourceIndices, uint16_t *resourcesLoad, uint16_t *startValues, uint16_t *startTimesWriterById)	{
 
 	uint16_t start = 0, scheduleLength = 0;
 
+	// Init array - set to zeros.
 	cudaPrepareArrays(cudaData, resourcesLoad, startValues, startTimesWriterById);
 	
 	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)	{
 
 		uint16_t activityId = blockOrder[i];
-
+		// Logical swap.
 		if (i == indexI)
 			activityId = blockOrder[indexJ];
 
 		if (i == indexJ)
 			activityId = blockOrder[indexI];
 
+		// Get the earliest start time without precedence penalty. (if moves are precedence penalty free)
 		uint16_t baseIndex = tex1Dfetch(cudaPredecessorsIndicesTex, activityId);
 		uint16_t numberOfPredecessors = tex1Dfetch(cudaPredecessorsIndicesTex, activityId+1)-baseIndex;
 		for (uint16_t j = 0; j < numberOfPredecessors; ++j)	{
@@ -135,8 +184,10 @@ __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&block
 			start = max(startTimesWriterById[predecessorId]+activitiesDuration[predecessorId], start);
 		}
 
+		// Get the earliest start time if the resources restrictions are counted.
 		start = max(cudaGetEarliestStartTime(cudaData.numberOfResources, activityId, resourcesLoad, resourceIndices), start);
 
+		// Add activity = update resources arrays + write start time.
 		uint16_t stop = start+activitiesDuration[activityId];
 		cudaAddActivity(activityId, start, stop, cudaData.numberOfResources, resourceIndices, resourcesLoad, startValues);
 		scheduleLength = max(scheduleLength, stop);
@@ -150,6 +201,16 @@ __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&block
 
 /* HASH TABLE INDEX FUNCTION */
 
+/*!
+ * \param numAct Number of activities.
+ * \param cudaBlockOrder Current order of the block.
+ * \param actX Swap index i - logical swap.
+ * \param actY Swap index j - logical swap.
+ * \param actI Swap index i - store purpose.
+ * \param actJ Swap index j - store purpose.
+ * \return Index to a hash table.
+ * \brief Function compute hash table index for tabu hash purposes.
+ */
 __device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlockOrder, uint16_t actX, uint16_t actY, uint32_t actI, uint32_t actJ)	{
 	uint32_t hashValue = 1;
 
@@ -171,13 +232,21 @@ __device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlo
 	hashValue ^= actJ;
 
 	hashValue /= 2;
-	hashValue &= 0x00ffffff;	// Size of hash table is 2^24.
+	hashValue &= 0x00ffffff;	// Size of the hash table is 2^24.
 
 	return hashValue;
 }
 
 /*	CUDA IMPLEMENT OF SIMPLE TABU LIST */
 
+/*!
+ * \param numberOfActivities Number of activities.
+ * \param i Swap index i.
+ * \param j Swap index j.
+ * \param tabuCache Block tabu cache - fast check if move is in tabu list.
+ * \return True if move is possible else false.
+ * \brief Check if move is in tabu list.
+ */
 inline __device__ bool cudaIsPossibleMove(const uint16_t& numberOfActivities, const uint16_t& i, const uint16_t& j, uint8_t *&tabuCache)	{
 	if (tabuCache[i*numberOfActivities+j] == 0 || tabuCache[j*numberOfActivities+i] == 0)
 		return true;
@@ -185,6 +254,16 @@ inline __device__ bool cudaIsPossibleMove(const uint16_t& numberOfActivities, co
 		return false;
 }
 
+/*!
+ * \param numberOfActivities Number of activities.
+ * \param i Swap index i of added move.
+ * \param j Swap index j of added move.
+ * \param tabuList Tabu list.
+ * \param tabuCache Tabu cache.
+ * \param tabuIdx Current index at tabu list.
+ * \param tabuListSize Tabu list size.
+ * \brief Add specified move to tabu list and update tabu cache.
+ */
 inline __device__ void cudaAddTurnToTabuList(const uint16_t& numberOfActivities, const uint16_t& i, const uint16_t& j,
 		MoveIndices *&tabuList, uint8_t *&tabuCache, uint16_t& tabuIdx, const uint16_t& tabuListSize)	{
 
@@ -204,6 +283,14 @@ inline __device__ void cudaAddTurnToTabuList(const uint16_t& numberOfActivities,
 
 /* CHECK PRECEDENCE FUNCTIONS */
 
+/*!
+ * \param successorsMatrix Bit matrix of successors.
+ * \param numberOfActivities Number of activities.
+ * \param activityId1 Activity identification.
+ * \param activityId2 Activity identification.
+ * \return True if an activity with identification activityId2 is successor of an activity with identification activityId1.
+ * \brief Check if activity ID2 is successor of activity ID1.
+ */
 inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, const int16_t& activityId1, const int16_t& activityId2)	{
 	uint32_t bitPossition = activityId1*numberOfActivities+activityId2;
 	if ((successorsMatrix[bitPossition/8] & (1<<(bitPossition % 8))) > 0)
@@ -212,6 +299,16 @@ inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix,
 		return false;
 }
 
+/*!
+ * \param order Sequence of activities.
+ * \param successorsMatrix Bit matrix of successors.
+ * \param numberOfActivities Number of activities.
+ * \param i Index i of swap.
+ * \param j Index j of swap.
+ * \param light If true then light version is executed. (precedences from activity at index i aren't checked)
+ * \return True if current swap won't break relation precedences else false.
+ * \brief Check if requested move is precedence penalty free.
+ */
 __device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
 	if (i > j)	{
 		int16_t t = i;
@@ -232,6 +329,13 @@ __device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, co
 
 /* HELP FUNCTIONS */
 
+/*!
+ * \param numberOfActivities Number of activities.
+ * \param tabuList Tabu list.
+ * \param tabuCache Tabu cache.
+ * \param numberOfElements Number of tabu list elements that will be removed.
+ * \brief Remove specified number of elements from tabu list and update tabu cache.
+ */
 inline __device__ void cudaClearTabuList(const uint16_t& numberOfActivities, MoveIndices *tabuList, uint8_t *tabuCache, const uint16_t& numberOfElements)	{
 	for (uint16_t k = threadIdx.x; k < numberOfElements; k += blockDim.x)	{
 		MoveIndices *tabuMove = &tabuList[k];
@@ -243,6 +347,16 @@ inline __device__ void cudaClearTabuList(const uint16_t& numberOfActivities, Mov
 	return;
 }
 
+/*!
+ * \param numberOfActivities Number of activities.
+ * \param tabuList Tabu list.
+ * \param tabuCache Tabu cache.
+ * \param tabuListSize Block tabu list size.
+ * \param blockOrder Block schedule - order.
+ * \param externalSolution Solution from a set or the best global solution. (order)
+ * \param externalTabuList Tabu list of external solution.
+ * \brief Replace current block solution with a read external solution (order+tabu).
+ */
 inline __device__ void cudaReadExternalSolution(const uint16_t& numberOfActivities, MoveIndices *tabuList, uint8_t *tabuCache, const uint16_t& tabuListSize,
 		uint16_t *blockOrder, uint16_t *externalSolution, MoveIndices *externalTabuList)	{
 	// Clear current tabu list and tabu cache.
@@ -263,6 +377,14 @@ inline __device__ void cudaReadExternalSolution(const uint16_t& numberOfActiviti
 
 /* REORDER ARRAY FUNCTION */
 
+/*!
+ * \param moves Array of moves which should be reorder.
+ * \param resultMerge Result array of reordered moves.
+ * \param threadsCounter Helper array for threads counters.
+ * \param size How many elements will be processed at moves array.
+ * \return Number of written elements to resultMerge array.
+ * \brief Move all valid moves to the resultMerge array and return number of valid moves.
+ */
 template <typename T>
 inline __device__ uint32_t cudaReorderMoves(uint32_t *moves, uint32_t *resultMerge, T *threadsCounter, const uint32_t& size)	{
 	threadsCounter[threadIdx.x] = 0;
@@ -297,6 +419,14 @@ inline __device__ uint32_t cudaReorderMoves(uint32_t *moves, uint32_t *resultMer
 
 /* DIVERSIFICATION FUNCTION */
 
+/*!
+ * \param numberOfActivities Number of activities.
+ * \param order Current schedule - sequence of activities.
+ * \param successorsMatrix Bit matrix of successors.
+ * \param diversificationSwaps Number of diversification swaps.
+ * \param state State of the random generation.
+ * \brief Function performs specified number of precedence penalty free swaps.
+ */
 inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfActivities, uint16_t *order, const uint8_t *successorsMatrix, 
 		const uint32_t& diversificationSwaps, curandState *state)	{
 		
@@ -317,6 +447,12 @@ inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfAct
 
 /*	CUDA IMPLEMENT OF GLOBAL KERNEL */
 
+/*!
+ * Global function for RCPSP problem. Blocks communicate with each other through global memory.
+ * Local variables are coalesced. Dynamic shared memory and texture memory is used.
+ * \param cudaData All required constants, pointers to device memory, setting variables, ....
+ * \brief Solve RCPSP problem on GPU.
+ */
 __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	
 	__shared__ uint32_t iter;
@@ -563,7 +699,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			if (cudaData.useTabuHash == true)	{
 				// Add move to hash table.
 				uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, 0, 0, iterBestMove.i, iterBestMove.j);
-				++cudaData.hashMap[hashIdx];
+				atomicInc(&cudaData.hashMap[hashIdx], 0xffffffff);
 			}
 		}
 		__syncthreads();
