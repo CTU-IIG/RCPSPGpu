@@ -8,7 +8,6 @@
 #include <iostream>
 #include <cuda.h>
 #include <curand_kernel.h>
-#include "ConfigureRCPSP.h"
 #include "CudaConstants.h"
 #include "CudaFunctions.cuh"
 
@@ -59,7 +58,7 @@ int unbindTexture(int option)	{
 /*!
  * \param cudaData RCPSP constants, variables, ...
  * \param resourcesLoad Array of the earliest resource start times.
- * \param startValue Helper array for resource evaluation.
+ * \param startValues Helper array for resource evaluation.
  * \param startTimesById Array of start times of the scheduled activities.
  * \brief Prepare arrays for next use (schedule evaluation).
  */
@@ -97,7 +96,7 @@ inline __device__ uint16_t cudaGetEarliestStartTime(const uint16_t& numberOfReso
  * \param numberOfResources Number of resources.
  * \param resourceIndices Access indices for resources.
  * \param resourcesLoad Array of the earliest resource start times.
- * \param startValue Helper array for resource evaluation.
+ * \param startValues Helper array for resource evaluation.
  * \brief Function add new activity and update resources arrays. Irreversible process.
  */
 inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_t& activityStart, const uint16_t& activityStop,
@@ -153,8 +152,8 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
  * \param activitiesDuration Duration of the activities.
  * \param resourceIndices Access indices for resources.
  * \param resourcesLoad Array of the earliest resource start times.
- * \param startValue Helper array for resource evaluation.
- * \param startTimesById Array of start times of the scheduled activities ordered by ID's.
+ * \param startValues Helper array for resource evaluation.
+ * \param startTimesWriterById Array of start times of the scheduled activities ordered by ID's.
  * \return Schedule length without any penalties.
  * \brief Function evaluate schedule and return total schedule length.
  */
@@ -378,6 +377,7 @@ inline __device__ void cudaReadExternalSolution(const uint16_t& numberOfActiviti
 /* REORDER ARRAY FUNCTION */
 
 /*!
+ * \tparam T uint16_t or uint32_t.
  * \param moves Array of moves which should be reorder.
  * \param resultMerge Result array of reordered moves.
  * \param threadsCounter Helper array for threads counters.
@@ -424,7 +424,7 @@ inline __device__ uint32_t cudaReorderMoves(uint32_t *moves, uint32_t *resultMer
  * \param order Current schedule - sequence of activities.
  * \param successorsMatrix Bit matrix of successors.
  * \param diversificationSwaps Number of diversification swaps.
- * \param state State of the random generation.
+ * \param state State of the random generator.
  * \brief Function performs specified number of precedence penalty free swaps.
  */
 inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfActivities, uint16_t *order, const uint8_t *successorsMatrix, 
@@ -712,10 +712,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		__syncthreads();
 
 		if (blockWriteGlobalBestSolution == true)	{
-/*			if (threadIdx.x == 0)	{
-				printf("block %d [%d]: Write global best solution!\n", blockIdx.x, iter);
-				printf("block %d [%d]: %d\n", blockIdx.x, iter, blockBestCost);
-			} */
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				cudaData.globalBestSolution[i] = blockBestSolution[i];
 			// Copy tabu list + zeros padding.
@@ -729,10 +725,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		}
 
 		if (blockWriteSetSolution == true)	{
-		/*	if (threadIdx.x == 0)	{
-				printf("block %d [%d]: Write set solution!\n", blockIdx.x, iter);
-				printf("block %d [%d]: %d\n", blockIdx.x, iter, blockBestCost);
-			} */
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				cudaData.solutionsSet[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
@@ -751,8 +743,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			}
 			__syncthreads();
 			if (blockReadPossible)	{
-	//			if (threadIdx.x == 0)
-	//				printf("block %d [%d]: Read global best solution!\n", blockIdx.x, iter);
 				// Read global best solution to memory.
 				cudaReadExternalSolution(cudaData.numberOfActivities, blockTabuList, blockTabuCache, blockTabuListSize,
 						blockCurrentOrder, cudaData.globalBestSolution, cudaData.globalBestSolutionTabuList);
@@ -774,8 +764,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			}
 			__syncthreads();
 			if (blockReadPossible)	{
-	//			if (threadIdx.x == 0)
-	//				printf("block %d [%d]: Read set solution!\n", blockIdx.x, iter);
 				if (threadIdx.x == 0)	{
 					blockIndexOfSetSolution = (blockIndexOfSetSolution+1) % cudaData.solutionsSetSize;
 				}
@@ -791,7 +779,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 					blockReadSetSolution = false;
 					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
 					atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
-					if (readCounter > cudaData.maximalValueOfReadCounter)	// !! Use value from cudaData struct!!
+					if (readCounter > cudaData.maximalValueOfReadCounter)
 						cudaDiversificationOfSolution(cudaData.numberOfActivities, blockCurrentOrder, blockSuccessorsMatrix, cudaData.numberOfDiversificationSwaps, &randState);
 				}
 			}

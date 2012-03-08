@@ -22,6 +22,11 @@ GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe
 # Compile all.
 build: CreateHeaderFile RCPSPGpu
 
+# Generate documentation.
+doc:
+	doxygen Documentation/doxyfilelatex; \
+	doxygen Documentation/doxyfilehtml
+
 # Compile CreateHeaderFile program.
 CreateHeaderFile: $(OBJ) CreateHeaderFile.o
 	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) -o $@ $(OBJ) CreateHeaderFile.o

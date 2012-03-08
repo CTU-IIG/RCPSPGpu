@@ -1,5 +1,5 @@
-#ifndef HLIDAC_PES_SCHEDULE_SOLVER_H
-#define HLIDAC_PES_SCHEDULE_SOLVER_H
+#ifndef HLIDAC_PES_SCHEDULE_SOLVER_CUH
+#define HLIDAC_PES_SCHEDULE_SOLVER_CUH
 
 /*!
  * \file ScheduleSolver.cuh
@@ -62,7 +62,7 @@ class ScheduleSolver {
 		 * \param activitiesOrder Sequence of the activities.
 		 * \param verbose If true then more informations (Cuda info, etc.) will be showed.
 		 * \return Return true if some Cuda error will be detected.
-		 * \brief 
+		 * \brief Copy required data to GPU and compute critical path makespan.
 		 */
 		bool prepareCudaMemory(uint16_t *activitiesOrder, bool verbose);
 		/*!
