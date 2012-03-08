@@ -600,7 +600,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	#endif
 }
 
-uint16_t ScheduleSolver::evaluateOrder(const uint16_t *order, uint16_t *startTimesWriter, uint16_t *startTimesWriterById)	const	{
+uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, uint16_t *startTimesWriter, uint16_t *startTimesWriterById)	const	{
 	bool freeMem = false;
 	uint16_t start = 0, scheduleLength = 0;
 	SourcesLoad load(numberOfResources,capacityOfResources);
@@ -632,7 +632,7 @@ uint16_t ScheduleSolver::evaluateOrder(const uint16_t *order, uint16_t *startTim
 	return scheduleLength;
 }
 
-uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t *startTimesById)	const	{
+uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t * const& startTimesById)	const	{
 	uint32_t penalty = 0;
 	for (uint16_t activityId = 0; activityId < numberOfActivities; ++activityId)	{
 		for (uint16_t j = 0; j < numberOfSuccessors[activityId]; ++j)	{
@@ -644,7 +644,7 @@ uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t *startTimesById
 	return penalty;
 }
 
-void ScheduleSolver::printSchedule(uint16_t *scheduleOrder, bool verbose, ostream& OUT)	const	{
+void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool verbose, ostream& OUT)	const	{
 	if (solutionComputed == true)	{
 		uint16_t *startTimes = new uint16_t[numberOfActivities];
 		uint16_t *startTimesById = new uint16_t[numberOfActivities];
@@ -697,7 +697,7 @@ bool ScheduleSolver::checkSwapPrecedencePenalty(const uint16_t * const& order, c
 	return true;
 }
 
-void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t numberOfSwaps)	{
+void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t& numberOfSwaps)	{
 	uint32_t performedSwaps = 0;
 	while (performedSwaps < numberOfSwaps)  {
 		uint16_t i = (rand() % (numberOfActivities-2)) + 1;
