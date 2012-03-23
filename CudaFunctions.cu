@@ -103,23 +103,13 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
 		const uint16_t& numberOfResources, uint16_t *&resourceIndices,  uint16_t *&resourcesLoad, uint16_t *&startValues)	{
 	
 	int32_t requiredSquares, timeDiff;
-	uint32_t c, k, capacityOfResource, resourceRequirement, baseResourceIdx;
-	uint32_t startTimePreviousUnit, newStartTime, resourceStartIdx;
+	uint32_t c, k, capacityOfResource, resourceRequirement, newStartTime, resourceStartIdx;
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
 		resourceStartIdx = resourceIndices[resourceId];
 		capacityOfResource = resourceIndices[resourceId+1]-resourceStartIdx;
 		resourceRequirement = tex1Dfetch(cudaActivitiesResourcesTex, activityId*numberOfResources+resourceId);
 		requiredSquares = resourceRequirement*(activityStop-activityStart);
 		if (requiredSquares > 0)	{
-			baseResourceIdx = capacityOfResource-resourceRequirement;
-			startTimePreviousUnit = ((resourceRequirement < capacityOfResource) ? resourcesLoad[resourceStartIdx+baseResourceIdx-1] : activityStop);
-			newStartTime = min(activityStop, startTimePreviousUnit);
-			if (activityStart < startTimePreviousUnit)	{
-				for (k = baseResourceIdx; k < capacityOfResource; ++k)	{
-					resourcesLoad[resourceStartIdx+k] = newStartTime;
-				}
-				requiredSquares -= resourceRequirement*(newStartTime-activityStart); 
-			}
 			c = 0; k = 0;
 			newStartTime = activityStop;
 			while (requiredSquares > 0 && k < capacityOfResource)	{
@@ -619,7 +609,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 				hashPenalty += cudaData.hashMap[hashIdx];
 			}
 			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
-			if ((isPossibleMove && totalEval+(totalEval == iterBestMove.cost ? 2 : 0)+hashPenalty < threadBestCost) || totalEval < blockBestCost)	{
+			if ((isPossibleMove && totalEval+(totalEval == iterBestMove.cost ? blockIdx.x : 0)+hashPenalty < threadBestCost) || totalEval < blockBestCost)	{
 				struct MoveInfo newBestThreadSolution = { .i = move->i, .j = move->j, .cost = totalEval };
 				blockMergeArray[threadIdx.x] = newBestThreadSolution;
 			}
