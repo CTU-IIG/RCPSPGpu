@@ -818,5 +818,6 @@ void runCudaSolveRCPSP(int numberOfBlock, int numberOfThreadsPerBlock, int compu
 		}
 	}
 	cudaSolveRCPSP<<<numberOfBlock,numberOfThreadsPerBlock,dynSharedMemSize>>>(cudaData);
+	cudaDeviceSynchronize();
 }
 
