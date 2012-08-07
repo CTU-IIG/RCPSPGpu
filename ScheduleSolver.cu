@@ -194,6 +194,7 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 
 	for (uint32_t k = 0; k < numberOfActivities; ++k)	{
+		#pragma omp parallel for collapse(2) schedule(dynamic,512) num_threads(4)
 		for (uint32_t i = 0; i < numberOfActivities; ++i)	{
 			for (uint32_t j = 0; j < numberOfActivities; ++j)	{
 				if (distanceMatrix[i][k] != -1 && distanceMatrix[k][j] != -1)	{
@@ -408,10 +409,10 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 
 	/* STATE OF COMMUNICATION FOR A SET OF SOLUTIONS */
-	if (!cudaError && cudaMalloc((void**) &cudaData.setStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMalloc((void**) &cudaData.lockSetSolution, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(14);
 	}
-	if (!cudaError && cudaMemset(cudaData.setStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMemset(cudaData.lockSetSolution, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(15);
 	}
 
@@ -435,10 +436,10 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 
 	/* STATE OF COMMUNICATION FOR A GLOBAL BEST SOLUTION */
-	if (!cudaError && cudaMalloc((void**) &cudaData.globalStateOfCommunication, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMalloc((void**) &cudaData.lockGlobalSolution, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(18);
 	}
-	if (!cudaError && cudaMemset(cudaData.globalStateOfCommunication, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMemset(cudaData.lockGlobalSolution, DATA_AVAILABLE, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(19);
 	}
 
@@ -453,6 +454,14 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 	if (!cudaError && cudaMalloc((void**) &cudaData.mergeHelpArray, (numberOfActivities-2)*cudaData.swapRange*numberOfBlock*sizeof(MoveIndices)) != cudaSuccess)	{
 		cudaError = errorHandler(21);
+	}
+
+	/* CREATE COUNTER TO COUNT NUMBER OF EVALUATED SCHEDULES */
+	if (!cudaError && cudaMalloc((void**) &cudaData.evaluatedSchedules, sizeof(uint64_t)) != cudaSuccess)	{
+		cudaError = errorHandler(22);
+	}
+	if (!cudaError && cudaMemset(cudaData.evaluatedSchedules, 0, sizeof(uint64_t)) != cudaSuccess)	{
+		cudaError = errorHandler(23);
 	}
 
 
@@ -475,12 +484,16 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 bool ScheduleSolver::errorHandler(int16_t phase)	{
 	cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 	switch (phase)	{
+		case 23:
+			cudaFree(cudaData.evaluatedSchedules);
+		case 22:
+			cudaFree(cudaData.mergeHelpArray);
 		case 21:
 			cudaFree(cudaData.swapFreeMergeArray);
 		case 20:
 			cudaFree(cudaData.blocksBestSolution);
 		case 19:
-			cudaFree(cudaData.globalStateOfCommunication);
+			cudaFree(cudaData.lockGlobalSolution);
 		case 18:
 			cudaFree(cudaData.globalBestSolutionTabuList);
 		case 17:
@@ -488,7 +501,7 @@ bool ScheduleSolver::errorHandler(int16_t phase)	{
 		case 16:
 			cudaFree(cudaData.globalBestSolution);
 		case 15:
-			cudaFree(cudaData.setStateOfCommunication);
+			cudaFree(cudaData.lockSetSolution);
 		case 14:
 			cudaFree(cudaData.solutionSetTabuLists);
 		case 13:
@@ -557,6 +570,10 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
+	if (!cudaError && cudaMemcpy(&numberOfEvaluatedSchedules, cudaData.evaluatedSchedules, sizeof(uint64_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
+		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
+		cudaError = true;	
+	}
 	if (!cudaError && bestGlobalCost < 0xffffffff)	{
 		solutionComputed = true;
 	}
@@ -605,7 +622,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 
 uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, uint16_t *startTimesWriter, uint16_t *startTimesWriterById)	const	{
 	bool freeMem = false;
-	uint16_t start = 0, scheduleLength = 0;
+	uint16_t scheduleLength = 0;
 	SourcesLoad load(numberOfResources,capacityOfResources);
 	if (startTimesWriterById == NULL)	{
 		startTimesWriterById = new uint16_t[numberOfActivities];
@@ -614,7 +631,7 @@ uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, uint16_t *
 	memset(startTimesWriterById, 0, sizeof(uint16_t)*numberOfActivities);
 
 	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-		uint16_t activityId = order[i];
+		uint16_t activityId = order[i], start = 0;
 		for (uint16_t j = 0; j < numberOfPredecessors[activityId]; ++j)	{
 			uint16_t predecessorId = activitiesPredecessors[activityId][j];
 			start = max(startTimesWriterById[predecessorId]+activitiesDuration[predecessorId], start);
@@ -652,28 +669,32 @@ void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool v
 		uint16_t *startTimes = new uint16_t[numberOfActivities];
 		uint16_t *startTimesById = new uint16_t[numberOfActivities];
 
-		size_t scheduleLength = evaluateOrder(scheduleOrder, startTimes, startTimesById);
-		size_t precedencePenalty = computePrecedencePenalty(startTimesById);
+		uint16_t scheduleLength = evaluateOrder(scheduleOrder, startTimes, startTimesById);
+		uint32_t precedencePenalty = computePrecedencePenalty(startTimesById);
 
 		if (verbose == true)	{
-			int32_t startTime = -1;
 			OUT<<"start\tactivities"<<endl;
-			for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-				if (startTime != ((int32_t) startTimes[i]))	{
-					if (i != 0) OUT<<endl;
-					OUT<<startTimes[i]<<":\t"<<(scheduleOrder[i]+1);
-					startTime = startTimes[i];
-				} else {
-					OUT<<" "<<(scheduleOrder[i]+1);
+			for (uint16_t c = 0; c <= scheduleLength; ++c)	{
+				bool first = true;
+				for (uint16_t id = 0; id < numberOfActivities; ++id)	{
+					if (startTimesById[id] == c)	{
+						if (first == true)	{
+							OUT<<c<<":\t"<<id+1;
+							first = false;
+						} else {
+							OUT<<" "<<id+1;
+						}
+					}
 				}
+				if (!first) OUT<<endl;
 			}
-			OUT<<endl;
 			OUT<<"Schedule length: "<<scheduleLength<<endl;
 			OUT<<"Precedence penalty: "<<precedencePenalty<<endl;
 			OUT<<"Critical path makespan: "<<criticalPathMakespan<<endl; 
 			OUT<<"Schedule solve time: "<<totalRunTime<<" s"<<endl;
+			OUT<<"Total number of evaluated schedules: "<<numberOfEvaluatedSchedules<<endl;
 		} else {
-			OUT<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]"<<endl; 
+			OUT<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]\t"<<numberOfEvaluatedSchedules<<endl; 
 		}
 
 		delete[] startTimesById;
@@ -732,14 +753,15 @@ void ScheduleSolver::freeCudaMemory()	{
 	cudaFree(cudaData.solutionsSet);
 	cudaFree(cudaData.solutionsSetInfo);
 	cudaFree(cudaData.solutionSetTabuLists);
-	cudaFree(cudaData.setStateOfCommunication);
+	cudaFree(cudaData.lockSetSolution);
 	cudaFree(cudaData.globalBestSolution);
 	cudaFree(cudaData.globalBestSolutionCost);
 	cudaFree(cudaData.globalBestSolutionTabuList);
-	cudaFree(cudaData.globalStateOfCommunication);
+	cudaFree(cudaData.lockGlobalSolution);
 	cudaFree(cudaData.blocksBestSolution);
 	cudaFree(cudaData.swapFreeMergeArray);
 	cudaFree(cudaData.mergeHelpArray);
+	cudaFree(cudaData.evaluatedSchedules);
 }
 
 ScheduleSolver::~ScheduleSolver()	{

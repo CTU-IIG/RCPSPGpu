@@ -14,7 +14,7 @@
  * Debug mode check only addActivity method. Although the most difficult method in this class.
  * \warning Debug mode decrease performance in a nasty way. (more than 10 times)
  */
-#define DEBUG_SOURCES 0
+#define DEBUG_SOURCES 1
 
 #include <iostream>
 #include <stdint.h>

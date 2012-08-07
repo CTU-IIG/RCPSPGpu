@@ -77,6 +77,7 @@ class ScheduleSolver {
 		 * \param startTimesWriterById Start times of the activities can be written to this array. Order is defined by activities ID's.
 		 * \return Length of the schedule.
 		 * \brief Input order is evaluated and start times are determined. Total schedule length is returned.
+		 * \warning Order of activities is sequence of putting to the schedule, start time values don't have to be ordered ascendly.
 		 */
 		uint16_t evaluateOrder(const uint16_t * const& order, uint16_t *startTimesWriter = NULL, uint16_t *startTimesWriterById = NULL) const;
 		/*!
@@ -177,6 +178,8 @@ class ScheduleSolver {
 
 		//! Purpose of this variable is to remember total computational time.
 		double totalRunTime;
+		//! Number of evaluated schedules on the GPU.
+		uint64_t numberOfEvaluatedSchedules;
 };
 
 #endif

@@ -109,7 +109,7 @@ struct CudaData {
 	//! Info about each solution at set.
 	SolutionInfo *solutionsSetInfo;
 	//! Lock variable - access to set solutions.
-	uint32_t *setStateOfCommunication;
+	uint32_t *lockSetSolution;
 
 	//! Global best solution (for all blocks).
 	uint16_t *globalBestSolution;
@@ -118,7 +118,7 @@ struct CudaData {
 	//! Tabu list of the best solution.
 	MoveIndices *globalBestSolutionTabuList;
 	//! Lock variable - access to global best solution.
-	uint32_t *globalStateOfCommunication;
+	uint32_t *lockGlobalSolution;
 
 	//! Every block save improving solution to proper order.
 	uint16_t *blocksBestSolution;
@@ -132,6 +132,9 @@ struct CudaData {
 	uint32_t maximalValueOfReadCounter;
 	//! Number of diversification swaps.
 	uint32_t numberOfDiversificationSwaps;
+
+	//! Number of evaluated schedules.
+	uint64_t *evaluatedSchedules;
 };
 
 /* TEXTURE HELPER FUNCTIONS */

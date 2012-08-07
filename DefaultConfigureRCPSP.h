@@ -25,7 +25,7 @@
 //! Number of diversification swaps.
 #define DEFAULT_DIVERSIFICATION_SWAPS 10
 //! Total number of generated set solutions.
-#define DEFAULT_NUMBER_OF_SET_SOLUTIONS 8
+#define DEFAULT_NUMBER_OF_SET_SOLUTIONS 4
 //! Number of blocks (independent search processes) per multiprocessor of GPU.
 #define DEFAULT_NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR 2
 //! Maximal value of read counter then diversification will be called.

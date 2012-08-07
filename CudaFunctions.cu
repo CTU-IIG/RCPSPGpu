@@ -4,7 +4,6 @@
  * \brief RCPSP Cuda functions.
  */
 
-#include <cstdio>
 #include <iostream>
 #include <cuda.h>
 #include <curand_kernel.h>
@@ -103,7 +102,7 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
 		const uint16_t& numberOfResources, uint16_t *&resourceIndices,  uint16_t *&resourcesLoad, uint16_t *&startValues)	{
 	
 	int32_t requiredSquares, timeDiff;
-	uint32_t c, k, capacityOfResource, resourceRequirement, newStartTime, resourceStartIdx;
+	int32_t c, k, capacityOfResource, resourceRequirement, newStartTime, resourceStartIdx;
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
 		resourceStartIdx = resourceIndices[resourceId];
 		capacityOfResource = resourceIndices[resourceId+1]-resourceStartIdx;
@@ -150,7 +149,7 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
 __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration,
 		 uint16_t *&resourceIndices, uint16_t *resourcesLoad, uint16_t *startValues, uint16_t *startTimesWriterById)	{
 
-	uint16_t start = 0, scheduleLength = 0;
+	uint16_t scheduleLength = 0;
 
 	// Init array - set to zeros.
 	cudaPrepareArrays(cudaData, resourcesLoad, startValues, startTimesWriterById);
@@ -166,6 +165,7 @@ __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&block
 			activityId = blockOrder[indexI];
 
 		// Get the earliest start time without precedence penalty. (if moves are precedence penalty free)
+		uint16_t start = 0;
 		uint16_t baseIndex = tex1Dfetch(cudaPredecessorsIndicesTex, activityId);
 		uint16_t numberOfPredecessors = tex1Dfetch(cudaPredecessorsIndicesTex, activityId+1)-baseIndex;
 		for (uint16_t j = 0; j < numberOfPredecessors; ++j)	{
@@ -477,6 +477,8 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	__shared__ curandState randState;
 
+	curandState threadRandState;
+	curand_init(blockDim.x*blockIdx.x+threadIdx.x, threadIdx.x, 0, &threadRandState);
 	uint16_t threadResourcesLoad[TOTAL_SUM_OF_CAPACITY];
 	uint16_t threadStartValues[MAXIMUM_CAPACITY_OF_RESOURCE];
 	uint16_t threadStartTimesById[NUMBER_OF_ACTIVITIES];
@@ -540,7 +542,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	// Block have to obtain initial read access.
 	if (threadIdx.x == 0)	{
-		while (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
+		while (atomicCAS(cudaData.lockSetSolution, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
 			;
 		blockBestCost = cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost;
 	}
@@ -554,7 +556,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	// Free read lock.
 	if (threadIdx.x == 0)	{
-		atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+		atomicExch(cudaData.lockSetSolution, DATA_AVAILABLE);
 	}
 
 
@@ -596,20 +598,22 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		else
 			swapMoves = cudaReorderMoves((uint32_t*) blockReorderingArrayHelp, (uint32_t*) blockReorderingArray,  blockPartitionCounterUInt32, swapMoves);
 
-
 		blockMergeArray[threadIdx.x].cost = 0xffffffff;
 		for (uint32_t i = threadIdx.x; i < swapMoves; i += blockDim.x)	{
 			struct MoveIndices *move = &blockReorderingArray[i];
 			uint32_t threadBestCost = blockMergeArray[threadIdx.x].cost;
 			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j, blockActivitiesDuration, blockResourceIndices,
 					threadResourcesLoad, threadStartValues, threadStartTimesById);
+			totalEval <<= 16;
+			totalEval |= (curand(&threadRandState) & 0x00003fff);
 			uint32_t hashPenalty = 0;
 			if (cudaData.useTabuHash == true)	{
 				uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, move->i, move->j, move->i, move->j);
 				hashPenalty += cudaData.hashMap[hashIdx];
+				hashPenalty <<= 16;
 			}
 			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
-			if ((isPossibleMove && totalEval+(totalEval == iterBestMove.cost ? blockIdx.x : 0)+hashPenalty < threadBestCost) || totalEval < blockBestCost)	{
+			if ((isPossibleMove && totalEval+/*(totalEval == iterBestMove.cost ? blockIdx.x : 0)*/+hashPenalty < threadBestCost) || (totalEval>>16) < blockBestCost)	{
 				struct MoveInfo newBestThreadSolution = { .i = move->i, .j = move->j, .cost = totalEval };
 				blockMergeArray[threadIdx.x] = newBestThreadSolution;
 			}
@@ -627,17 +631,25 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		if (threadIdx.x == 0)	{
 			blockReadPossible = false;
 			iterBestMove = blockMergeArray[0];
+			iterBestMove.cost >>= 16;
+			atomicAdd((unsigned long long*) cudaData.evaluatedSchedules, swapMoves);
 			if (iterBestMove.cost < blockBestCost)	{
 				blockWriteBestBlock = true;
 				blockBestCost = iterBestMove.cost;
 				blockNumberOfIterationsSinceBest = 0;
 			}
 
-			if (blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest)	{
+			uint32_t readPossitionCost;
+			if (blockReadFromSet == true)
+				readPossitionCost = cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost;
+			else
+				readPossitionCost = *cudaData.globalBestSolutionCost;
+
+			if (blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest || readPossitionCost != blockBestCost) {
 				bool globalAccess = false, setAccess = false;
-				if (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+				if (atomicCAS(cudaData.lockGlobalSolution, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
 					globalAccess = true;
-				if (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+				if (atomicCAS(cudaData.lockSetSolution, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
 					setAccess = true;
 
 				if (globalAccess && setAccess)	{
@@ -647,29 +659,31 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 						cudaData.solutionsSetInfo[blockIndexOfSetSolution].readCounter = 0;
 						cudaData.solutionsSetInfo[blockIndexOfSetSolution].solutionCost = blockBestCost;
 					}	else	{
-						atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+						atomicExch(cudaData.lockSetSolution, DATA_AVAILABLE);
 					}
 
 					if (blockBestCost < *cudaData.globalBestSolutionCost)	{
 						blockWriteGlobalBestSolution = true;
 						*cudaData.globalBestSolutionCost = blockBestCost;
 					}	else	{
-						atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+						atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
 					}
 
-					if (!blockReadSetSolution && !blockReadGlobalBestSolution)	{
-						if (blockReadFromSet == true)
-							blockReadGlobalBestSolution = true;
-						else
-							blockReadSetSolution = true;
+					if (readPossitionCost < blockBestCost || blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest)	{
+						if (!blockReadSetSolution && !blockReadGlobalBestSolution)	{
+							if (blockReadFromSet == true)
+								blockReadGlobalBestSolution = true;
+							else
+								blockReadSetSolution = true;
 
-						blockReadFromSet = !blockReadFromSet;
+							blockReadFromSet = !blockReadFromSet;
+						}
 					}
 				} else {
 					if (setAccess)
-						atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+						atomicExch(cudaData.lockSetSolution, DATA_AVAILABLE);
 					if (globalAccess)
-						atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+						atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
 				}
 			}  else if (!blockWriteBestBlock)	{
 				++blockNumberOfIterationsSinceBest;
@@ -710,7 +724,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			__syncthreads();
 			if (threadIdx.x == 0)	{
 				blockWriteGlobalBestSolution = false;
-				atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+				atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
 			}
 		}
 
@@ -722,13 +736,13 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			__syncthreads();
 			if (threadIdx.x == 0)	{
 				blockWriteSetSolution = false;
-				atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+				atomicExch(cudaData.lockSetSolution, DATA_AVAILABLE);
 			}
 		}
 
 		if (blockReadGlobalBestSolution == true)	{
 			if (threadIdx.x == 0)	{
-				if (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+				if (atomicCAS(cudaData.lockGlobalSolution, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
 					blockReadPossible = true;
 			}
 			__syncthreads();
@@ -742,14 +756,14 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 					blockReadGlobalBestSolution = false;
 					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
-					atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+					atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
 				}
 			}
 		}
 
 		if (blockReadSetSolution == true)	{
 			if (threadIdx.x == 0)	{
-				if (atomicCAS(cudaData.setStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
+				if (atomicCAS(cudaData.lockSetSolution, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
 					blockReadPossible = true;
 			}
 			__syncthreads();
@@ -768,7 +782,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 					blockReadSetSolution = false;
 					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
-					atomicExch(cudaData.setStateOfCommunication, DATA_AVAILABLE);
+					atomicExch(cudaData.lockSetSolution, DATA_AVAILABLE);
 					if (readCounter > cudaData.maximalValueOfReadCounter)
 						cudaDiversificationOfSolution(cudaData.numberOfActivities, blockCurrentOrder, blockSuccessorsMatrix, cudaData.numberOfDiversificationSwaps, &randState);
 				}
@@ -783,7 +797,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	// Write solution if is better than best found.
 	if (threadIdx.x == 0)	{
-		while (atomicCAS(cudaData.globalStateOfCommunication, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
+		while (atomicCAS(cudaData.lockGlobalSolution, DATA_AVAILABLE, DATA_ACCESS) != DATA_AVAILABLE)
 			;
 	}
 	__syncthreads();
@@ -799,7 +813,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	__syncthreads();
 
 	if (threadIdx.x == 0)
-		atomicExch(cudaData.globalStateOfCommunication, DATA_AVAILABLE);
+		atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
 
 	return;
 }
