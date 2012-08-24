@@ -52,10 +52,10 @@ class SourcesLoad {
 		 */		
 		void addActivity(const uint16_t& activityStart, const uint16_t& activityStop, const uint8_t * const& activityRequirement);
 		/*!
-		 * \param OUT Output stream.
+		 * \param output Output stream.
 		 * \brief Print current state of resources.
 		 */		
-		void printCurrentState(std::ostream& OUT = std::cout) const;
+		void printCurrentState(std::ostream& output = std::cout) const;
 
 		//! Free all allocated memory.
 		~SourcesLoad();

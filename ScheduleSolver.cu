@@ -9,6 +9,12 @@
 #include <sys/time.h>
 #elif defined _WIN32 || defined _WIN64 || defined WIN32 || defined WIN64
 #include <Windows.h>
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#endif
+
+#ifndef UINT32_MAX
+#define UINT32_MAX 0xffffffff
 #endif
 
 #include "ConfigureRCPSP.h"
@@ -219,11 +225,18 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	SolutionInfo *infoAboutSchedules = new SolutionInfo[ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS];
 	uint16_t *randomSchedules = new uint16_t[ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS*numberOfActivities], *schedWr = randomSchedules;
 
-	// Rewrite to sets.
+	uint32_t bestSetCost = UINT32_MAX;
+	uint16_t *bestSetOrder = schedWr;
+
 	for (uint16_t b = 0; b < ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS; ++b)	{
 		makeDiversification(activitiesOrder, successorsMatrix, 100);
+		uint32_t costOfSetSolution = evaluateOrder(activitiesOrder);
 		infoAboutSchedules[b].readCounter = 0;
-		infoAboutSchedules[b].solutionCost = evaluateOrder(activitiesOrder);
+		infoAboutSchedules[b].solutionCost = costOfSetSolution;
+		if (bestSetCost > costOfSetSolution)	{
+			bestSetOrder = schedWr;
+			bestSetCost = costOfSetSolution;
+		}
 		schedWr = copy(activitiesOrder, activitiesOrder+numberOfActivities, schedWr);
 	}
 
@@ -420,10 +433,13 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolution, numberOfActivities*sizeof(uint16_t)) != cudaSuccess)	{
 		cudaError = errorHandler(15);
 	}
+	if (!cudaError && cudaMemcpy(cudaData.globalBestSolution, bestSetOrder, numberOfActivities*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(16);
+	}
 	if (!cudaError && cudaMalloc((void**) &cudaData.globalBestSolutionCost, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(16);
 	}
-	if (!cudaError && cudaMemset(cudaData.globalBestSolutionCost, UCHAR_MAX, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMemcpy(cudaData.globalBestSolutionCost, &bestSetCost, sizeof(uint32_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
 		cudaError = errorHandler(17);
 	}
 
@@ -664,7 +680,7 @@ uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t * const& startT
 	return penalty;
 }
 
-void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool verbose, ostream& OUT)	const	{
+void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool verbose, ostream& output)	const	{
 	if (solutionComputed == true)	{
 		uint16_t *startTimes = new uint16_t[numberOfActivities];
 		uint16_t *startTimesById = new uint16_t[numberOfActivities];
@@ -673,34 +689,34 @@ void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool v
 		uint32_t precedencePenalty = computePrecedencePenalty(startTimesById);
 
 		if (verbose == true)	{
-			OUT<<"start\tactivities"<<endl;
+			output<<"start\tactivities"<<endl;
 			for (uint16_t c = 0; c <= scheduleLength; ++c)	{
 				bool first = true;
 				for (uint16_t id = 0; id < numberOfActivities; ++id)	{
 					if (startTimesById[id] == c)	{
 						if (first == true)	{
-							OUT<<c<<":\t"<<id+1;
+							output<<c<<":\t"<<id+1;
 							first = false;
 						} else {
-							OUT<<" "<<id+1;
+							output<<" "<<id+1;
 						}
 					}
 				}
-				if (!first) OUT<<endl;
+				if (!first) output<<endl;
 			}
-			OUT<<"Schedule length: "<<scheduleLength<<endl;
-			OUT<<"Precedence penalty: "<<precedencePenalty<<endl;
-			OUT<<"Critical path makespan: "<<criticalPathMakespan<<endl; 
-			OUT<<"Schedule solve time: "<<totalRunTime<<" s"<<endl;
-			OUT<<"Total number of evaluated schedules: "<<numberOfEvaluatedSchedules<<endl;
+			output<<"Schedule length: "<<scheduleLength<<endl;
+			output<<"Precedence penalty: "<<precedencePenalty<<endl;
+			output<<"Critical path makespan: "<<criticalPathMakespan<<endl; 
+			output<<"Schedule solve time: "<<totalRunTime<<" s"<<endl;
+			output<<"Total number of evaluated schedules: "<<numberOfEvaluatedSchedules<<endl;
 		} else {
-			OUT<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]\t"<<numberOfEvaluatedSchedules<<endl; 
+			output<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]\t"<<numberOfEvaluatedSchedules<<endl; 
 		}
 
 		delete[] startTimesById;
 		delete[] startTimes;
 	} else {
-		OUT<<"Solution hasn't been computed yet!"<<endl;
+		output<<"Solution hasn't been computed yet!"<<endl;
 	}
 }
 
@@ -734,8 +750,8 @@ void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t 
 	}
 }
 
-void ScheduleSolver::printBestSchedule(bool verbose, ostream& OUT)	const	{
-	printSchedule(bestScheduleOrder, verbose, OUT);
+void ScheduleSolver::printBestSchedule(bool verbose, ostream& output)	const	{
+	printSchedule(bestScheduleOrder, verbose, output);
 }
 
 void ScheduleSolver::freeCudaMemory()	{

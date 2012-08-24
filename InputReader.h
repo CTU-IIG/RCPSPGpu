@@ -52,10 +52,10 @@ class InputReader {
 		uint8_t* getCapacityOfResources() const { return capacityOfResources; }
 
 		/*!
-		 * \param OUT Output stream.
+		 * \param output Output stream.
 		 * \brief Print read project data to output stream.
 		 */		
-		void printInstance(std::ostream& OUT = std::cout)	const;
+		void printInstance(std::ostream& output = std::cout)	const;
 
 		//! Free project data structures.
 		~InputReader() { freeInstanceData(); }

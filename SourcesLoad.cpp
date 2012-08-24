@@ -210,12 +210,12 @@ void SourcesLoad::addActivity(const uint16_t& activityStart, const uint16_t& act
 	#endif
 }
 
-void SourcesLoad::printCurrentState(ostream& OUT)	const	{
+void SourcesLoad::printCurrentState(ostream& output)	const	{
 	for (uint8_t resourceId = 0; resourceId < numberOfResources; ++resourceId)	{
-		OUT<<"Resource "<<(uint16_t) resourceId+1<<":";
+		output<<"Resource "<<(uint16_t) resourceId+1<<":";
 		for (uint8_t capIdx = 0; capIdx < capacityOfResources[resourceId]; ++capIdx)	
-			OUT<<" "<<resourcesLoad[resourceId][capIdx];
-		OUT<<endl;
+			output<<" "<<resourcesLoad[resourceId][capIdx];
+		output<<endl;
 	}
 }
 

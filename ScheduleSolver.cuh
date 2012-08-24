@@ -43,10 +43,10 @@ class ScheduleSolver {
 		void solveSchedule(const uint32_t& maxIter = ConfigureRCPSP::NUMBER_OF_ITERATIONS, const uint32_t& maxIterSinceBest = ConfigureRCPSP::MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST);
 		/*!
 		 * \param verbose If false then only result makespan, critical path makespan and computational time will be printed.
-		 * \param OUT Output stream.
+		 * \param output Output stream.
 		 * \brief Print best found schedule, schedule length and computational time.
 		 */
-		void printBestSchedule(bool verbose = true, std::ostream& OUT = std::cout) const;
+		void printBestSchedule(bool verbose = true, std::ostream& output = std::cout) const;
 
 		//! Free all allocated resources (CPU + GPU).
 		~ScheduleSolver();
@@ -90,10 +90,10 @@ class ScheduleSolver {
 		/*!
 		 * \param scheduleOrder Order of activities that should be evaluated.
 		 * \param verbose If true then complete schedule will be printed else only basic information is printed.
-		 * \param OUT Output stream.
+		 * \param output Output stream.
 		 * \brief Print schedule and schedule length. 
 		 */
-		void printSchedule(const uint16_t * const& scheduleOrder, bool verbose = true, std::ostream& OUT = std::cout) const;
+		void printSchedule(const uint16_t * const& scheduleOrder, bool verbose = true, std::ostream& output = std::cout) const;
 		/*!
 		 * \param order Order of activities.
 		 * \param successorsMatrix Matrix of successors that is computed at prepareCudaMemory method.

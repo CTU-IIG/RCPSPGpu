@@ -231,26 +231,26 @@ void InputReader::allocateBaseArrays()	{
 		activitiesRequiredResources[activityId] = new uint8_t[totalNumberOfResources];
 }
 
-void InputReader::printInstance(ostream& OUT)	const	{
+void InputReader::printInstance(ostream& output)	const	{
 	for (uint16_t actId = 0; actId < numberOfActivities; ++actId)	{
-		OUT<<string(50,'+')<<endl;
-		OUT<<"Activity number: "<<actId+1<<endl;
-		OUT<<"Duration of activity: "<<(uint16_t) activitiesDuration[actId]<<endl;	
-		OUT<<"Required sources (Resource ID : Units required):"<<endl;
+		output<<string(50,'+')<<endl;
+		output<<"Activity number: "<<actId+1<<endl;
+		output<<"Duration of activity: "<<(uint16_t) activitiesDuration[actId]<<endl;	
+		output<<"Required sources (Resource ID : Units required):"<<endl;
 		for (uint8_t *resPtr = activitiesRequiredResources[actId]; resPtr < activitiesRequiredResources[actId]+totalNumberOfResources; ++resPtr)	{
-			OUT<<"\t("<<((resPtr-activitiesRequiredResources[actId])+1)<<" : "<<(uint16_t) *resPtr<<")"<<endl;
+			output<<"\t("<<((resPtr-activitiesRequiredResources[actId])+1)<<" : "<<(uint16_t) *resPtr<<")"<<endl;
 		}
-		OUT<<"Successors of activity:";
+		output<<"Successors of activity:";
 		for (uint16_t *sucPtr = activitiesSuccessors[actId]; sucPtr < activitiesSuccessors[actId]+activitiesNumberOfSuccessors[actId]; ++sucPtr)	{
-			OUT<<" "<<*sucPtr+1;
+			output<<" "<<*sucPtr+1;
 		}
-		OUT<<endl;
-		OUT<<string(50,'-')<<endl;
+		output<<endl;
+		output<<string(50,'-')<<endl;
 	}
-	OUT<<"Max capacity of resources:";
+	output<<"Max capacity of resources:";
 	for (uint8_t *capPtr = capacityOfResources; capPtr < capacityOfResources+totalNumberOfResources; ++capPtr)
-		OUT<<" "<<(uint16_t) *capPtr;
-	OUT<<endl;
+		output<<" "<<(uint16_t) *capPtr;
+	output<<endl;
 }
 
 
@@ -282,8 +282,8 @@ void InputReader::freeInstanceData()	{
 
 void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)	{
 
-	ofstream OUT(headerFile.c_str());
-	if (!OUT)
+	ofstream output(headerFile.c_str());
+	if (!output)
 		throw runtime_error("writeHeaderFile: Cannot write to header file! Check permision!");
 
 	uint16_t maxNumberOfActivities = 0, maxNumberOfResources = 0, maxCapacityOfResource = 0, maxTotalCapacity = 0;
@@ -303,24 +303,24 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 		maxTotalCapacity = max(maxTotalCapacity, totalCapacity);
 	}
 
-	OUT<<"#ifndef HLIDAC_PES_CUDA_CONSTANTS_H"<<endl;
-	OUT<<"#define HLIDAC_PES_CUDA_CONSTANTS_H"<<endl;
-	OUT<<endl;
-	OUT<<"#define NUMBER_OF_ACTIVITIES "<<maxNumberOfActivities<<endl;
-	OUT<<"#define NUMBER_OF_RESOURCES "<<maxNumberOfResources<<endl;
-	OUT<<"#define MAXIMUM_CAPACITY_OF_RESOURCE "<<maxCapacityOfResource<<endl;
-	OUT<<"#define TOTAL_SUM_OF_CAPACITY "<<maxTotalCapacity<<endl;
-	OUT<<endl;
-	OUT<<"/* Hash constants. */"<<endl;
-	OUT<<"#define HASH_TABLE_SIZE 16777216"<<endl;
-	OUT<<"#define R 3144134277"<<endl;
-	OUT<<endl;
-	OUT<<"/* Blocks communication. */"<<endl;
-	OUT<<"#define DATA_AVAILABLE 0"<<endl;
-	OUT<<"#define DATA_ACCESS 1"<<endl;
-	OUT<<endl;
-	OUT<<"#endif"<<endl<<endl;
+	output<<"#ifndef HLIDAC_PES_CUDA_CONSTANTS_H"<<endl;
+	output<<"#define HLIDAC_PES_CUDA_CONSTANTS_H"<<endl;
+	output<<endl;
+	output<<"#define NUMBER_OF_ACTIVITIES "<<maxNumberOfActivities<<endl;
+	output<<"#define NUMBER_OF_RESOURCES "<<maxNumberOfResources<<endl;
+	output<<"#define MAXIMUM_CAPACITY_OF_RESOURCE "<<maxCapacityOfResource<<endl;
+	output<<"#define TOTAL_SUM_OF_CAPACITY "<<maxTotalCapacity<<endl;
+	output<<endl;
+	output<<"/* Hash constants. */"<<endl;
+	output<<"#define HASH_TABLE_SIZE 16777216"<<endl;
+	output<<"#define R 3144134277"<<endl;
+	output<<endl;
+	output<<"/* Blocks communication. */"<<endl;
+	output<<"#define DATA_AVAILABLE 0"<<endl;
+	output<<"#define DATA_ACCESS 1"<<endl;
+	output<<endl;
+	output<<"#endif"<<endl<<endl;
 
-	OUT.close();
+	output.close();
 }
 
