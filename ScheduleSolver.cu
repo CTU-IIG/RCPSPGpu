@@ -889,8 +889,8 @@ void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t 
 void ScheduleSolver::freeCudaMemory()	{
 	for (int i = 0; i < 5; ++i)
 		unbindTexture(i);
-	cudaFree(cudaData.cudaSuccessorsIdxsArray);
-	cudaFree(cudaData.cudaSuccessorsArray);
+	cudaFree(cudaSuccessorsIdxsArray);
+	cudaFree(cudaSuccessorsArray);
 	cudaFree(cudaData.activitiesDuration);
 	cudaFree(cudaPredecessorsArray);
 	cudaFree(cudaPredecessorsIdxsArray);
