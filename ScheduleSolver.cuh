@@ -71,15 +71,42 @@ class ScheduleSolver {
 		 * \brief Print error message, free Cuda allocated resources and return true.
 		 */
 		bool errorHandler(int16_t phase);
+		
 		/*!
 		 * \param order Activities order.
-		 * \param startTimesWriter Start times of the activities can be written to this array. Order is the same as at the order parameter.
-		 * \param startTimesWriterById Start times of the activities can be written to this array. Order is defined by activities ID's.
+		 * \param relatedActivities It's array of successors or predecessors. It depends on a way of evaluation (forward, backward).
+		 * \param numberOfRelatedActivities Number of successors/predecessors for each activity.
+		 * \param timeValuesById The earliest start time values for forward evaluation
+		 * and transformed time values for backward evaluation.
+		 * \param forwardEvaluation It determines if forward or backward schedule is evaluated.
 		 * \return Length of the schedule.
-		 * \brief Input order is evaluated and start times are determined. Total schedule length is returned.
-		 * \warning Order of activities is sequence of putting to the schedule, start time values don't have to be ordered ascendly.
+		 * \brief Input order is evaluated and the earliest start/transformed time values are computed.
+		 * \warning Order of activities is sequence of putting to the schedule, time values don't have to be ordered.
 		 */
-		uint16_t evaluateOrder(const uint16_t * const& order, uint16_t *startTimesWriter = NULL, uint16_t *startTimesWriterById = NULL) const;
+		uint16_t evaluateOrder(const uint16_t * const& order, const uint16_t * const * const& relatedActivities,
+			       const uint16_t * const& numberOfRelatedActivities, uint16_t *& timeValuesById, bool forwardEvaluation) const;
+		/*!
+		 * \param order The sequence of putting to the schedule. It's activity order.
+		 * \param startTimesById The earliest start time values for each scheduled activity.
+		 * \return Project makespan, i.e. the length of the schedule.
+		 * \brief It evaluates order of activities and determines the earliest start time values.
+		 */
+		uint16_t forwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const;
+		/*!
+		 * \param order The sequence of putting to the schedule. It's activity order.
+		 * \param startTimesById The latest start time values for each scheduled activity.
+		 * \return Project makespan, i.e. the length of the schedule.
+		 * \brief It evaluates order (in reverse order) of activities and determines the latest start time values.
+		 */
+		uint16_t backwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const;
+		/*!
+		 * \param order Order of activities. It determines the order of putting to the schedule.
+		 * \param bestScheduleStartTimesById The earliest start time values for the best found schedule.
+		 * \return Project makespan, i.e. the length of the schedule.
+		 * \brief Iterative method tries to shake down activities in the schedule to ensure equally loaded resources.
+		 * Therefore, the shorter schedule could be found.
+		 */
+		uint16_t shakingDownEvaluation(const uint16_t * const& order, uint16_t *bestScheduleStartTimesById) const;
 		/*!
 		 * \param startTimesById Start times of activities ordered by ID's.
 		 * \return Precedence penalty of the schedule.
@@ -87,13 +114,6 @@ class ScheduleSolver {
 		 * \note Because precedence free swaps and shifts are currently used, this function is only for debugging purposes.
 		 */
 		uint32_t computePrecedencePenalty(const uint16_t * const& startTimesById) const;
-		/*!
-		 * \param scheduleOrder Order of activities that should be evaluated.
-		 * \param verbose If true then complete schedule will be printed else only basic information is printed.
-		 * \param output Output stream.
-		 * \brief Print schedule and schedule length. 
-		 */
-		void printSchedule(const uint16_t * const& scheduleOrder, bool verbose = true, std::ostream& output = std::cout) const;
 		/*!
 		 * \param order Order of activities.
 		 * \param successorsMatrix Matrix of successors that is computed at prepareCudaMemory method.
@@ -103,6 +123,29 @@ class ScheduleSolver {
 		 * \brief Method check if candidate for a swap is precedence penalty free.
 		 */
 		bool checkSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, uint16_t i, uint16_t j) const;
+
+		/*!
+		 * \param order Original activities order.
+		 * \param startTimesById The earliest start time values in the order W.
+		 * \brief It transforms the earliest start time values to the order W. The order W is written to the variable order.
+		 */
+		void convertStartTimesById2ActivitiesOrder(uint16_t *order, const uint16_t * const& startTimesById) const;
+		/*!
+		 * \param order Order of activities.
+		 * \param timeValuesById Assigned time values to activities, it is used for sorting input order.
+		 * \param size It's size of the arrays, i.e. number of project activities.
+		 * \brief Input order of activities is sorted in accordance with time values. It's stable sort.
+		 */
+		static void insertSort(uint16_t* order, const uint16_t * const& timeValuesById, const int32_t& size);
+		
+		/*!
+		 * \param scheduleOrder Order of activities that should be evaluated.
+		 * \param verbose If true then complete schedule will be printed else only basic information is printed.
+		 * \param output Output stream.
+		 * \brief Print schedule and schedule length. 
+		 */
+		void printSchedule(const uint16_t * const& scheduleOrder, bool verbose = true, std::ostream& output = std::cout) const;
+
 		/*!
 		 * \param order Initial sequence of the activities.
 		 * \param successorsMatrix Matrix of successors that is computed at prepareCudaMemory method.
@@ -110,6 +153,7 @@ class ScheduleSolver {
 		 * \brief Random swaps are performed at initial schedule.
 		 */
 		void makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t& numberOfSwaps);
+		
 		//! Free all allocated Cuda resources.
 		void freeCudaMemory();
 
@@ -145,6 +189,8 @@ class ScheduleSolver {
 		uint8_t **activitiesResources;
 		//! Critical Path Makespan. (Critical Path Method)
 		int32_t criticalPathMakespan;
+		//! Upper bound of the project duration (sum of the all time flows).
+		uint16_t upperBoundMakespan;
 		
 
 		/* MUTABLE DATA */	
@@ -173,6 +219,10 @@ class ScheduleSolver {
 		uint16_t *cudaPredecessorsArray;
 		//! Texture array of predecessors indices.
 		uint16_t *cudaPredecessorsIdxsArray;
+		//! Texture array of successors.
+		uint16_t *cudaSuccessorsArray;
+		//! Texture array of successors indices.
+		uint16_t *cudaSuccessorsIdxsArray; 
 
 		/* MISC DATA */
 

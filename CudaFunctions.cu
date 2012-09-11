@@ -23,8 +23,12 @@ using std::endl;
 texture<uint8_t,1,cudaReadModeElementType> cudaActivitiesResourcesTex;
 //! Texture reference of predecessors.
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsTex;
-//! Texture referece of predecessors indices.
+//! Texture reference of predecessors indices.
 texture<uint16_t,1,cudaReadModeElementType> cudaPredecessorsIndicesTex;
+//! Texture reference of successors.
+texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsTex;
+//! Texture reference of successors indices.
+texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsIndicesTex;
 
 /* CUDA BIND TEXTURES */
 
@@ -36,6 +40,10 @@ int bindTexture(void *texData, int32_t arrayLength, int option)	{
 			return cudaBindTexture(NULL, cudaPredecessorsTex, texData, arrayLength*sizeof(uint16_t));
 		case PREDECESSORS_INDICES:
 			return cudaBindTexture(NULL, cudaPredecessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
+		case SUCCESSORS:
+			return cudaBindTexture(NULL, cudaSuccessorsTex, texData, arrayLength*sizeof(uint16_t));
+		case SUCCESSORS_INDICES:
+			return cudaBindTexture(NULL, cudaSuccessorsIndicesTex, texData, arrayLength*sizeof(uint16_t));
 		default:
 			cerr<<"bindTextures: Invalid option!"<<endl;
 	}
@@ -50,6 +58,10 @@ int unbindTexture(int option)	{
 			return cudaUnbindTexture(cudaPredecessorsTex);
 		case PREDECESSORS_INDICES:
 			return cudaUnbindTexture(cudaPredecessorsIndicesTex);
+		case SUCCESSORS:
+			return cudaUnbindTexture(cudaSuccessorsTex);
+		case SUCCESSORS_INDICES:
+			return cudaUnbindTexture(cudaSuccessorsIndicesTex);
 		default:
 			cerr<<"unbindTextures: Invalid option!"<<endl;
 	}
@@ -57,22 +69,19 @@ int unbindTexture(int option)	{
 }
 
 
-/*	CUDA IMPLEMENT OF SOURCES LOAD */
+/* CUDA IMPLEMENT OF SOURCES LOAD - CAPACITY RESOLUTION  */
 
 /*!
  * \param cudaData RCPSP constants, variables, ...
  * \param resourcesLoad Array of the earliest resource start times.
  * \param startValues Helper array for resource evaluation.
- * \param startTimesById Array of start times of the scheduled activities.
  * \brief Prepare arrays for next use (schedule evaluation).
  */
-inline __device__ void cudaPrepareArrays(const CudaData& cudaData, uint16_t *& resourcesLoad, uint16_t *& startValues, uint16_t *& startTimesById)	{
+inline __device__ void cudaPrepareArrays(const CudaData& cudaData, uint16_t *& resourcesLoad, uint16_t *& startValues)	{
 	for (uint16_t i = 0; i < cudaData.sumOfCapacities; ++i)
 		resourcesLoad[i] = 0;
 	for (uint16_t i = 0; i < cudaData.maximalCapacityOfResource; ++i)
 		startValues[i] = 0;
-	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)
-		startTimesById[i] = 0;
 }
 
 /*!
@@ -136,7 +145,70 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
 	}
 }
 
-/* CUDA IMPLEMENT OF BASE SCHEDULE SOLVER FUNCTIONS */
+/* CUDA IMPLEMENT OF SOURCES LOAD - TIME RESOLUTION  */
+
+/*!
+ * \param numberOfActivities Number of activities in the project.
+ * \param numberOfResources Number of renewable resources in the project.
+ * \param UBTime Upper bound of the maximal duration of the project.
+ * \param remainingResourcesCapacity Free capacity of each resource with respect to time.
+ * \param resourceIndices Access indices for resources.
+ * \brief It initializes vectors of free capacities to initial values (capacities of resources).
+ */
+inline __device__ void cudaPrepareArrays(const uint16_t& numberOfActivities, const uint16_t& numberOfResources, const uint32_t& UBTime,
+	       	uint8_t *& remainingResourcesCapacity, uint16_t *& resourceIndices)	{
+	for (uint16_t resourceId = 0; resourceId < numberOfResources; ++resourceId)
+		for (uint32_t t = 0; t < UBTime; ++t)
+			remainingResourcesCapacity[resourceId*UBTime+t] = resourceIndices[resourceId+1]-resourceIndices[resourceId];
+}
+
+/*!
+ * \param numberOfResources Number of renewable resources in the project.
+ * \param activityId Identification of the activity that should be added (required for texture memory access).
+ * \param remainingResourcesCapacity Free capacity of each resource with respect to time.
+ * \param precTime The earliest precedence violation free start time of the activity activityId.
+ * \param activityDuration Duration of the activity activityId.
+ * \param UBTime Upper bound of the maximal duration of the project.
+ * \return The earliest start time of the activity without resource overload.
+ * \brief It finds out the earliest start time of the activity activityId.
+ */
+inline __device__ uint16_t cudaGetEarliestStartTime(const uint16_t& numberOfResources, const uint16_t& activityId,
+		uint8_t *&remainingResourcesCapacity, const uint16_t& precTime, int32_t activityDuration, const uint32_t& UBTime) {
+	int32_t loadTime = 0, t = UBTime;
+	for (t = precTime; t < UBTime && loadTime < activityDuration; ++t)       {
+		bool capacityAvailable = true;
+		for (int32_t resourceId = 0; resourceId < numberOfResources && capacityAvailable; ++resourceId)        {
+			uint8_t activityRequirement = tex1Dfetch(cudaActivitiesResourcesTex, activityId*numberOfResources+resourceId);
+			if (remainingResourcesCapacity[resourceId*UBTime+t] < activityRequirement)	{
+				loadTime = 0;
+				capacityAvailable = false;
+			}
+		}
+		if (capacityAvailable == true)
+			++loadTime;
+	}
+	return (uint16_t) t-loadTime;
+}
+
+/*!
+ * \param activityId Identification of the added activity.
+ * \param activityStart Scheduled start time of the activity.
+ * \param activityStop Scheduled finish time of the activity.
+ * \param numberOfResources Number of renewable resources in the project.
+ * \param remainingResourcesCapacity Free capacity of each resource with respect to time.
+ * \param UBTime Upper bound of the maximal duration of the project.
+ * \brief It updates the state of all resources after activity is added.
+ */
+inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_t& activityStart, const uint16_t& activityStop,
+		const uint16_t& numberOfResources, uint8_t *&remainingResourcesCapacity, const uint32_t& UBTime)	{
+	for (int32_t resourceId = 0; resourceId < numberOfResources; ++resourceId)     {
+		uint8_t activityRequirement = tex1Dfetch(cudaActivitiesResourcesTex, activityId*numberOfResources+resourceId);
+		for (uint32_t t = activityStart; t < activityStop; ++t)
+			remainingResourcesCapacity[resourceId*UBTime+t] -= activityRequirement;
+	}
+}
+
+/* CUDA IMPLEMENTATION OF THE BASE RESOURCE EVALUATION FUNCTIONS */
 
 /*!
  * \param cudaData RCPSP constants, variables, ...
@@ -147,49 +219,235 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
  * \param resourceIndices Access indices for resources.
  * \param resourcesLoad Array of the earliest resource start times.
  * \param startValues Helper array for resource evaluation.
+ * \param remainingResourcesCapacity Free capacity of each resource with respect to time.
  * \param startTimesWriterById Array of start times of the scheduled activities ordered by ID's.
+ * \param capacityResolution If true then capacity based algorithm is selected else time based algorithm is selected.
+ * \param forward It determines if schedule is forward or backward evaluated.
  * \return Schedule length without any penalties.
  * \brief Function evaluate schedule and return total schedule length.
  */
-__device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration,
-		 uint16_t *&resourceIndices, uint16_t *resourcesLoad, uint16_t *startValues, uint16_t *startTimesWriterById)	{
-
+__device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ,
+	       	uint8_t *&activitiesDuration,uint16_t *&resourceIndices, uint16_t *resourcesLoad, uint16_t *startValues,
+	       	uint8_t *remainingResourcesCapacity, uint16_t *startTimesWriterById, bool capacityResolution, bool forward = true)	{
+	// Current cost of the schedule.
 	uint16_t scheduleLength = 0;
 
-	// Init array - set to zeros.
-	cudaPrepareArrays(cudaData, resourcesLoad, startValues, startTimesWriterById);
+	// Init state of resources.
+	if (capacityResolution == true)
+		cudaPrepareArrays(cudaData, resourcesLoad, startValues);
+	else
+		cudaPrepareArrays(cudaData.numberOfActivities, cudaData.numberOfResources, MAXIMAL_SUM_OF_FLOATS,
+				remainingResourcesCapacity, resourceIndices);
 	
 	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)	{
 
-		uint16_t activityId = blockOrder[i];
+		uint16_t index = ((forward == true) ? i : cudaData.numberOfActivities-i-1);
+		uint16_t activityId = blockOrder[index];
+
 		// Logical swap.
-		if (i == indexI)
+		if (index == indexI)
 			activityId = blockOrder[indexJ];
 
-		if (i == indexJ)
+		if (index == indexJ)
 			activityId = blockOrder[indexI];
 
 		// Get the earliest start time without precedence penalty. (if moves are precedence penalty free)
 		uint16_t start = 0;
-		uint16_t baseIndex = tex1Dfetch(cudaPredecessorsIndicesTex, activityId);
-		uint16_t numberOfPredecessors = tex1Dfetch(cudaPredecessorsIndicesTex, activityId+1)-baseIndex;
-		for (uint16_t j = 0; j < numberOfPredecessors; ++j)	{
-			uint16_t predecessorId = tex1Dfetch(cudaPredecessorsTex, baseIndex+j);
-			start = max(startTimesWriterById[predecessorId]+activitiesDuration[predecessorId], start);
+		uint16_t baseIndex;
+		uint16_t numberOfRelatedActivities;
+		if (forward == true) {
+			baseIndex = tex1Dfetch(cudaPredecessorsIndicesTex, activityId);
+			numberOfRelatedActivities = tex1Dfetch(cudaPredecessorsIndicesTex, activityId+1)-baseIndex;
+		} else	{
+			baseIndex = tex1Dfetch(cudaSuccessorsIndicesTex, activityId);
+			numberOfRelatedActivities = tex1Dfetch(cudaSuccessorsIndicesTex, activityId+1)-baseIndex;
+		}
+		for (uint16_t j = 0; j < numberOfRelatedActivities; ++j)	{
+			uint16_t relatedActivityId;
+			if (forward == true)
+				relatedActivityId = tex1Dfetch(cudaPredecessorsTex, baseIndex+j);
+			else
+				relatedActivityId = tex1Dfetch(cudaSuccessorsTex, baseIndex+j);
+			start = max(startTimesWriterById[relatedActivityId]+activitiesDuration[relatedActivityId], start);
 		}
 
 		// Get the earliest start time if the resources restrictions are counted.
-		start = max(cudaGetEarliestStartTime(cudaData.numberOfResources, activityId, resourcesLoad, resourceIndices), start);
+		if (capacityResolution == true)
+			start = max(cudaGetEarliestStartTime(cudaData.numberOfResources, activityId, resourcesLoad, resourceIndices), start);
+		else
+			start = max(cudaGetEarliestStartTime(cudaData.numberOfResources, activityId, remainingResourcesCapacity,
+						start, activitiesDuration[activityId], MAXIMAL_SUM_OF_FLOATS), start);
 
 		// Add activity = update resources arrays + write start time.
 		uint16_t stop = start+activitiesDuration[activityId];
-		cudaAddActivity(activityId, start, stop, cudaData.numberOfResources, resourceIndices, resourcesLoad, startValues);
+		if (capacityResolution == true)
+			cudaAddActivity(activityId, start, stop, cudaData.numberOfResources, resourceIndices, resourcesLoad, startValues);
+		else
+			cudaAddActivity(activityId, start, stop, cudaData.numberOfResources, remainingResourcesCapacity, MAXIMAL_SUM_OF_FLOATS);
 		scheduleLength = max(scheduleLength, stop);
 
 		startTimesWriterById[activityId] = start;
 	}
 
 	return scheduleLength;
+}
+
+/*!
+ * \param order Order of activities.
+ * \param timeValuesById Time values of activities. Accessed through the identifications of activities.
+ * \param size Length of the order and timeValuesById arrays.
+ * \brief It reorders input order in accordance with timeValuesById array. It's stable sort with algorithm complexity O(n^2).
+ */
+inline __device__ void cudaInsertSort(uint16_t* order, const uint16_t * const& timeValuesById, const int16_t& size)	{
+	for (int32_t i = 1; i < size; ++i)	{
+		for (int32_t j = i; (j > 0) && ((timeValuesById[order[j]] < timeValuesById[order[j-1]]) == true); --j)	{
+			uint16_t t = order[j];
+			order[j] = order[j-1];
+			order[j-1] = t;
+		}
+	}
+}
+
+/*!
+ * \param order Order of activities.
+ * \param startTimesById Start time values of activities. Accessed through the identifications of activities.
+ * \param size Length of the order and timeValuesById arrays.
+ * \brief It converts startTimesById array to activities order.
+ */
+inline __device__ void cudaConvertStartTimesById2ActivitiesOrder(uint16_t *& order, uint16_t *startTimesById, uint16_t size)	{
+	cudaInsertSort(order, startTimesById, size);
+}
+
+/* CHECK PRECEDENCE FUNCTIONS */
+
+/*!
+ * \param successorsMatrix Bit matrix of successors.
+ * \param numberOfActivities Number of activities.
+ * \param activityId1 Activity identification.
+ * \param activityId2 Activity identification.
+ * \return True if an activity with identification activityId2 is successor of an activity with identification activityId1.
+ * \brief Check if activity ID2 is successor of activity ID1.
+ */
+inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, const int16_t& activityId1, const int16_t& activityId2)	{
+	uint32_t bitPossition = activityId1*numberOfActivities+activityId2;
+	if ((successorsMatrix[bitPossition/8] & (1<<(bitPossition % 8))) > 0)
+		return true;
+	else
+		return false;
+}
+
+/*!
+ * \param order Sequence of activities.
+ * \param successorsMatrix Bit matrix of successors.
+ * \param numberOfActivities Number of activities.
+ * \param i Index i of swap.
+ * \param j Index j of swap.
+ * \param light If true then light version is executed. (precedences from activity at index i aren't checked)
+ * \return True if current swap won't break relation precedences else false.
+ * \brief Check if requested move is precedence penalty free.
+ */
+__device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
+	if (i > j)	{
+		int16_t t = i;
+		i = j; j = t;
+	}
+	for (uint16_t k = i; k < j; ++k)	{
+		if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[k], order[j]) == true)
+			return false;
+	}
+	if (!light)	{
+		for (uint16_t k = i+1; k <= j; ++k)	{
+			if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[i], order[k]) == true)
+				return false;
+		}
+	}
+	return true;
+}
+
+__device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *successorsMatrix, uint8_t *activitiesDuration, uint16_t *startTimesById)  {
+	uint32_t penalty = 0;
+	for (uint16_t id1 = 0; id1 < numAct; ++id1)        {
+		for (uint16_t id2 = 0; id2 < numAct; ++id2)        {
+			if (id1 != id2 && cudaGetMatrixBit(successorsMatrix, numAct, id1, id2) == true)	{
+				if (startTimesById[id1]+activitiesDuration[id1] > startTimesById[id2])
+					penalty += startTimesById[id1]+activitiesDuration[id1]-startTimesById[id2];
+			}
+
+		}
+	}
+	return penalty;
+}
+
+/*!
+ * \param cudaData RCPSP constants, variables, ...
+ * \param blockOrder Order of activities.
+ * \param bestScheduleStartTimesById Start time values of activities for the best shaked schedule.
+ * \param activitiesDuration Duration of each activity.
+ * \param resourceIndices Access indices for resources.
+ * \param resourcesLoad Array of the earliest resource start times.
+ * \param startValues Helper array for resource evaluation.
+ * \param remainingResourcesCapacity Free capacity of each resource with respect to time.
+ * \return The makespan of the best found shaked schedule.
+ * \brief Iterative method tries to shake down activities in the schedule to ensure equally loaded resources. 
+ * Therefore, the shorter schedule could be found.
+ */
+__device__ uint16_t cudaShakingDownEvaluation(const CudaData& cudaData, uint16_t *& blockOrder,
+	       	uint16_t *bestScheduleStartTimesById, uint8_t *& activitiesDuration, uint16_t *& resourceIndices,
+		uint16_t *resourcesLoad, uint16_t *startValues, uint8_t *remainingResourcesCapacity)	{
+	int32_t scheduleLength = 0;
+	uint16_t bestScheduleLength = 0xffff;
+	uint16_t *currentOrder = new uint16_t[cudaData.numberOfActivities];
+	if (!currentOrder)
+		return bestScheduleLength;
+	uint16_t *timeValuesById = new uint16_t[cudaData.numberOfActivities];
+	if (!timeValuesById)	{
+		delete[] currentOrder;
+		return bestScheduleLength;
+	}
+
+	for (uint16_t i = 0; i < cudaData.numberOfActivities; ++i)
+		currentOrder[i] = blockOrder[i];
+
+	while (true)	{
+		scheduleLength = cudaEvaluateOrder(cudaData, currentOrder, 0xffff, 0xffff, activitiesDuration, resourceIndices,
+			       	resourcesLoad, startValues, remainingResourcesCapacity, timeValuesById, false, true);
+
+		if (scheduleLength < bestScheduleLength)	{
+			bestScheduleLength = scheduleLength;
+			if (bestScheduleStartTimesById != NULL)	{
+				for (uint16_t id = 0; id < cudaData.numberOfActivities; ++id)
+					bestScheduleStartTimesById[id] = timeValuesById[id];
+			}
+		} else {
+			break;
+		}
+
+		for (uint16_t id = 0; id < cudaData.numberOfActivities; ++id)
+			timeValuesById[id] += activitiesDuration[id];
+
+		cudaInsertSort(currentOrder, timeValuesById, cudaData.numberOfActivities);
+
+		int32_t scheduleLengthBackward = cudaEvaluateOrder(cudaData, currentOrder, 0xffff, 0xffff, activitiesDuration,
+			       	resourceIndices, resourcesLoad, startValues, remainingResourcesCapacity, timeValuesById, false, false);
+		int32_t diffCmax = scheduleLength-scheduleLengthBackward;
+
+		for (uint32_t id = 0; id < cudaData.numberOfActivities; ++id)
+			timeValuesById[id] = scheduleLengthBackward-timeValuesById[id]-activitiesDuration[id];
+
+		for (uint32_t id = 0; id < cudaData.numberOfActivities; ++id)	{
+			if (((int32_t) timeValuesById[id])+diffCmax > 0)
+				timeValuesById[id] += diffCmax;
+			else
+				timeValuesById[id] = 0;
+		}
+
+		cudaInsertSort(currentOrder, timeValuesById, cudaData.numberOfActivities);
+	}
+
+	delete[] timeValuesById;
+	delete[] currentOrder;
+
+	return bestScheduleLength;
 }
 
 
@@ -274,52 +532,6 @@ inline __device__ void cudaAddTurnToTabuList(const uint16_t& numberOfActivities,
 	tabuIdx = (tabuIdx+1) % tabuListSize;
 }
 
-
-/* CHECK PRECEDENCE FUNCTIONS */
-
-/*!
- * \param successorsMatrix Bit matrix of successors.
- * \param numberOfActivities Number of activities.
- * \param activityId1 Activity identification.
- * \param activityId2 Activity identification.
- * \return True if an activity with identification activityId2 is successor of an activity with identification activityId1.
- * \brief Check if activity ID2 is successor of activity ID1.
- */
-inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, const int16_t& activityId1, const int16_t& activityId2)	{
-	uint32_t bitPossition = activityId1*numberOfActivities+activityId2;
-	if ((successorsMatrix[bitPossition/8] & (1<<(bitPossition % 8))) > 0)
-		return true;
-	else
-		return false;
-}
-
-/*!
- * \param order Sequence of activities.
- * \param successorsMatrix Bit matrix of successors.
- * \param numberOfActivities Number of activities.
- * \param i Index i of swap.
- * \param j Index j of swap.
- * \param light If true then light version is executed. (precedences from activity at index i aren't checked)
- * \return True if current swap won't break relation precedences else false.
- * \brief Check if requested move is precedence penalty free.
- */
-__device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
-	if (i > j)	{
-		int16_t t = i;
-		i = j; j = t;
-	}
-	for (uint16_t k = i; k < j; ++k)	{
-		if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[k], order[j]) == true)
-			return false;
-	}
-	if (!light)	{
-		for (uint16_t k = i+1; k <= j; ++k)	{
-			if (cudaGetMatrixBit(successorsMatrix, numberOfActivities, order[i], order[k]) == true)
-				return false;
-		}
-	}
-	return true;
-}
 
 /* HELP FUNCTIONS */
 
@@ -476,6 +688,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	__shared__ bool blockWriteSetSolution;
 	__shared__ bool blockReadGlobalBestSolution;
 	__shared__ bool blockWriteGlobalBestSolution;
+	__shared__ bool blockCriticalPathLengthAchieved;
 	__shared__ uint32_t blockNumberOfIterationsSinceBest;
 	__shared__ uint32_t blockMaximalNumberOfIterationsSinceBest;
 	__shared__ uint16_t *blockResourceIndices;
@@ -484,8 +697,10 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	curandState threadRandState;
 	curand_init(blockDim.x*blockIdx.x+threadIdx.x, threadIdx.x, 0, &threadRandState);
+
 	uint16_t threadResourcesLoad[TOTAL_SUM_OF_CAPACITY];
 	uint16_t threadStartValues[MAXIMUM_CAPACITY_OF_RESOURCE];
+	uint8_t threadRemainingResourcesCapacity[NUMBER_OF_RESOURCES*MAXIMAL_SUM_OF_FLOATS];
 	uint16_t threadStartTimesById[NUMBER_OF_ACTIVITIES];
 
 	extern __shared__ uint8_t dynamicSharedMemory[];
@@ -499,6 +714,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		blockWriteSetSolution = false;
 		blockReadGlobalBestSolution = false;
 		blockWriteGlobalBestSolution = false;
+		blockCriticalPathLengthAchieved= false;
 		blockNumberOfIterationsSinceBest = 0;
 		blockIndexOfSetSolution = blockIdx.x % cudaData.solutionsSetSize;
 		maximalNeighbourhoodSize = (cudaData.numberOfActivities-2)*cudaData.swapRange;
@@ -569,7 +785,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		blockBestSolution[i] = blockCurrentOrder[i];
 	}
 
-	while (iter < cudaData.numberOfIterationsPerBlock)	{
+	while (iter < cudaData.numberOfIterationsPerBlock && !blockCriticalPathLengthAchieved)	{
 
 		for (uint16_t i = threadIdx.x+1; i < (cudaData.numberOfActivities-1); i += blockDim.x)	{
 			bool relationsBroken = false;
@@ -611,10 +827,11 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		for (uint32_t i = threadIdx.x; i < swapMoves; i += blockDim.x)	{
 			struct MoveIndices *move = &blockReorderingArray[i];
 			uint32_t threadBestCost = blockMergeArray[threadIdx.x].cost;
-			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j, blockActivitiesDuration, blockResourceIndices,
-					threadResourcesLoad, threadStartValues, threadStartTimesById);
+			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j,
+					blockActivitiesDuration, blockResourceIndices,threadResourcesLoad,
+					threadStartValues, threadRemainingResourcesCapacity, threadStartTimesById, cudaData.capacityResolutionAlgorithm);
 			totalEval <<= 16;
-			totalEval |= (curand(&threadRandState) & 0x00003fff);
+			totalEval |= (curand(&threadRandState) & 0x0000ffff);
 			uint32_t hashPenalty = 0;
 			if (cudaData.useTabuHash == true)	{
 				uint32_t hashIdx = cudaComputeHashTableIndex(cudaData.numberOfActivities, blockCurrentOrder, move->i, move->j, move->i, move->j);
@@ -654,7 +871,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			else
 				readPossitionCost = *cudaData.globalBestSolutionCost;
 
-			if (blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest || readPossitionCost != blockBestCost) {
+			if (blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest || readPossitionCost != blockBestCost || *cudaData.globalBestSolutionCost == cudaData.criticalPathLength) {
 				bool globalAccess = false, setAccess = false;
 				if (atomicCAS(cudaData.lockGlobalSolution, DATA_AVAILABLE, DATA_ACCESS) == DATA_AVAILABLE)
 					globalAccess = true;
@@ -676,6 +893,10 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 						*cudaData.globalBestSolutionCost = blockBestCost;
 					}	else	{
 						atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
+					}
+
+					if (*cudaData.globalBestSolutionCost == cudaData.criticalPathLength)	{
+						blockCriticalPathLengthAchieved = true;
 					}
 
 					if (readPossitionCost < blockBestCost || blockNumberOfIterationsSinceBest >= blockMaximalNumberOfIterationsSinceBest)	{
@@ -716,6 +937,17 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		__syncthreads();
 
 		if (blockWriteBestBlock == true)	{
+			if (threadIdx.x == 0)	{
+				uint16_t improvedCost = cudaShakingDownEvaluation(cudaData, blockCurrentOrder, threadStartTimesById,
+						blockActivitiesDuration, blockResourceIndices, threadResourcesLoad,
+						threadStartValues, threadRemainingResourcesCapacity);
+				if (improvedCost < blockBestCost)	{
+					blockBestCost = improvedCost;
+					cudaConvertStartTimesById2ActivitiesOrder(blockCurrentOrder,
+							threadStartTimesById, cudaData.numberOfActivities);
+				}
+			}
+			__syncthreads();
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				blockBestSolution[i] = blockCurrentOrder[i];
 			blockWriteBestBlock = false;
@@ -833,15 +1065,16 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 /* START MAIN CUDA KERNEL */
 
 void runCudaSolveRCPSP(int numberOfBlock, int numberOfThreadsPerBlock, int computeCapability, int dynSharedMemSize, const CudaData& cudaData)	{
-	if (computeCapability >= 200)	{
-		if (dynSharedMemSize < 7950)	{
-			// Prefare 16 kB shared memory + 48 kB cache L1.
-			cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
-		} else {
-			// Prefare 48 kB shared memory + 16 kB cache L1.
-			cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferShared);
-		}
+	if (dynSharedMemSize < 7950)	{
+		// Prefare 16 kB shared memory + 48 kB cache L1.
+		cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferL1);
+	} else {
+		// Prefare 48 kB shared memory + 16 kB cache L1.
+		cudaFuncSetCacheConfig(cudaSolveRCPSP, cudaFuncCachePreferShared);
 	}
+	// Set maximum amount of dynamic memory to 1 MB.
+	cudaDeviceSetLimit(cudaLimitMallocHeapSize, 1024*1024);
+	// Launch the main GPU kernel.
 	cudaSolveRCPSP<<<numberOfBlock,numberOfThreadsPerBlock,dynSharedMemSize>>>(cudaData);
 	cudaDeviceSynchronize();
 }

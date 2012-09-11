@@ -37,6 +37,11 @@ ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : sol
 	numberOfSuccessors = rcpspData.getActivitiesNumberOfSuccessors();
 	activitiesSuccessors = rcpspData.getActivitiesSuccessors();
 	activitiesResources = rcpspData.getActivitiesResources();
+
+	// It computes the estimate of the longest duration of the project.
+	upperBoundMakespan = 0;
+	for (uint16_t id = 0; id < numberOfActivities; ++id)
+		upperBoundMakespan += activitiesDuration[id];
 	
 	// Create required structures and copy data to GPU.
 	uint16_t *activitiesOrder = new uint16_t[numberOfActivities];
@@ -140,21 +145,25 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 	/* PREPARE DATA PHASE */
 
-	/* CONVERT PREDECESSOR ARRAY TO 1D */
-	uint32_t numOfElPred = 0;
-	uint16_t *predIdxs = new uint16_t[numberOfActivities+1];
+	/* CONVERT PREDECESSOR AND SUCCESSOR ARRAY TO 1D */
+	uint32_t numOfElPred = 0, numOfElSuc = 0;
+	uint16_t *predIdxs = new uint16_t[numberOfActivities+1], *sucIdxs = new uint16_t[numberOfActivities+1];
 
-	predIdxs[0] = 0;
+	predIdxs[0] = sucIdxs[0] = 0;
 	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
+		numOfElSuc += numberOfSuccessors[i];
 		numOfElPred += numberOfPredecessors[i];
+		sucIdxs[i+1] = numOfElSuc;
 		predIdxs[i+1] = numOfElPred;
 	}
 
-	uint16_t *linPredArray = new uint16_t[numOfElPred], *wrPtr = linPredArray;
+	uint16_t *linSucArray = new uint16_t[numOfElSuc], *linPredArray = new uint16_t[numOfElPred];
+	uint16_t *sucWr = linSucArray, *predWr = linPredArray;
 	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-		for (uint16_t j = 0; j < numberOfPredecessors[i]; ++j)	{
-			*(wrPtr++) = activitiesPredecessors[i][j];
-		}
+		for (uint16_t j = 0; j < numberOfPredecessors[i]; ++j)
+			*(predWr++) = activitiesPredecessors[i][j];
+		for (uint16_t j = 0; j < numberOfSuccessors[i]; ++j)
+			*(sucWr++) = activitiesSuccessors[i][j];
 	}
 
 	/* CONVERT ACTIVITIES RESOURCE REQUIREMENTS TO 1D ARRAY */
@@ -227,10 +236,17 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 	uint32_t bestSetCost = UINT32_MAX;
 	uint16_t *bestSetOrder = schedWr;
+	uint16_t *startTimeValues = new uint16_t[numberOfActivities];
 
 	for (uint16_t b = 0; b < ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS; ++b)	{
 		makeDiversification(activitiesOrder, successorsMatrix, 100);
-		uint32_t costOfSetSolution = evaluateOrder(activitiesOrder);
+		uint16_t costOfSetSolution;
+		if ((b % 2) == 0)	{
+			costOfSetSolution = forwardScheduleEvaluation(activitiesOrder, startTimeValues);
+		} else {
+			costOfSetSolution = shakingDownEvaluation(activitiesOrder, startTimeValues);
+			convertStartTimesById2ActivitiesOrder(activitiesOrder, startTimeValues);
+		}
 		infoAboutSchedules[b].readCounter = 0;
 		infoAboutSchedules[b].solutionCost = costOfSetSolution;
 		if (bestSetCost > costOfSetSolution)	{
@@ -239,6 +255,7 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		}
 		schedWr = copy(activitiesOrder, activitiesOrder+numberOfActivities, schedWr);
 	}
+	delete[] startTimeValues;
 
 	/* CUDA INFO + DATA PHASE */
 
@@ -254,6 +271,32 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	cudaData.useTabuHash = ConfigureRCPSP::USE_TABU_HASH;
 	cudaData.maximalValueOfReadCounter = ConfigureRCPSP::MAXIMAL_VALUE_OF_READ_COUNTER;
 	cudaData.numberOfDiversificationSwaps = ConfigureRCPSP::DIVERSIFICATION_SWAPS;
+	// Select evaluation algorithm.
+	if (numberOfActivities < 150)	{
+		// It computes required parameters.
+		double branchFactor;
+		uint32_t sumOfCapacities = 0, sumOfSuccessors = 0;
+		uint8_t minimalResourceCapacity, maximalResourceCapacity;
+		for (uint32_t r = 0; r < numberOfResources; ++r)
+			sumOfCapacities += capacityOfResources[r];
+		for (uint32_t i = 0; i < numberOfActivities; ++i)
+			sumOfSuccessors += numberOfSuccessors[i];
+		minimalResourceCapacity = *min_element(capacityOfResources, capacityOfResources+numberOfResources);
+		maximalResourceCapacity = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
+		branchFactor = (((double) sumOfSuccessors)/((double) numberOfActivities));
+		// Decision what evaluation algorithm should be used.
+		if (minimalResourceCapacity >= 29)
+			cudaData.capacityResolutionAlgorithm = false;
+		else if (sumOfCapacities >= 116 && branchFactor > 2.106)
+			cudaData.capacityResolutionAlgorithm = false;
+		else if (minimalResourceCapacity >= 25 && maximalResourceCapacity >= 42)
+			cudaData.capacityResolutionAlgorithm = false;
+		else
+			cudaData.capacityResolutionAlgorithm = true;
+	} else {
+		cudaData.capacityResolutionAlgorithm = true;
+	}
+	cudaData.criticalPathLength = criticalPathMakespan;
 
 	/* GET CUDA INFO - SET NUMBER OF THREADS PER BLOCK */
 
@@ -281,15 +324,7 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 		cudaData.sumOfCapacities = sumOfCapacity;
 		cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
-
-		if (cudaCapability >= 200)	{
-			numberOfThreadsPerBlock = 512;
-		} else	{
-			if (numberOfActivities > 256)
-				numberOfThreadsPerBlock = 512;
-			else
-				numberOfThreadsPerBlock = 256;
-		}
+		numberOfThreadsPerBlock = 512;
 
 		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
 		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
@@ -302,6 +337,11 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		dynSharedMemSize += numberOfActivities*sizeof(uint16_t);	// block order
 		dynSharedMemSize += (numberOfResources+1)*sizeof(uint16_t);	// resources indices
 		dynSharedMemSize += numberOfActivities*sizeof(uint8_t);		// duration of activities
+
+		if (cudaCapability < 200)	{
+			cerr<<"Pre-Fermi cards aren't supported! Sorry..."<<endl;
+			cudaError = true;
+		}
 	} else {
 		cudaError = errorHandler(-1);
 	}
@@ -480,6 +520,26 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 		cudaError = errorHandler(23);
 	}
 
+	/* COPY SUCCESSORS+INDICES TO CUDA TEXTURE MEMORY */
+	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsArray, numOfElSuc*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(23);
+	}
+	if (!cudaError && cudaMemcpy(cudaSuccessorsArray, linSucArray, numOfElSuc*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(24);
+	}
+	if (!cudaError && bindTexture(cudaSuccessorsArray, numOfElSuc, SUCCESSORS) != cudaSuccess)	{
+		cudaError = errorHandler(24);
+	}
+	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsIdxsArray, (numberOfActivities+1)*sizeof(uint16_t)) != cudaSuccess)	{
+		cudaError = errorHandler(25);
+	}
+	if (!cudaError && cudaMemcpy(cudaSuccessorsIdxsArray, sucIdxs, (numberOfActivities+1)*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
+		cudaError = errorHandler(26);
+	}
+	if (!cudaError && bindTexture(cudaSuccessorsIdxsArray, numberOfActivities+1, SUCCESSORS_INDICES) != cudaSuccess)	{
+		cudaError = errorHandler(26);
+	}
+
 
 	/* FREE ALLOCATED TEMPORARY RESOURCES */
 	for (uint32_t i = 0; i < numberOfActivities; ++i)
@@ -490,9 +550,12 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	delete[] randomSchedules;
 	delete[] infoAboutSchedules;
 	delete[] reqResLin;
+	delete[] linSucArray;
 	delete[] linPredArray;
+	delete[] sucIdxs;
 	delete[] predIdxs;
 	delete[] activitiesOrder;
+
 
 	return cudaError;
 }
@@ -500,6 +563,12 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 bool ScheduleSolver::errorHandler(int16_t phase)	{
 	cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 	switch (phase)	{
+		case 26:
+			cudaFree(cudaSuccessorsIdxsArray);
+		case 25:
+			unbindTexture(SUCCESSORS);
+		case 24:
+			cudaFree(cudaSuccessorsArray);
 		case 23:
 			cudaFree(cudaData.evaluatedSchedules);
 		case 22:
@@ -577,8 +646,8 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	/* GET BEST FOUND SOLUTION */
 
 	bool cudaError = false;
-	uint32_t bestGlobalCost;
-	if (!cudaError && cudaMemcpy(&bestGlobalCost, cudaData.globalBestSolutionCost, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
+	uint32_t bestScheduleCost = 0;
+	if (!cudaError && cudaMemcpy(&bestScheduleCost, cudaData.globalBestSolutionCost, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
@@ -590,7 +659,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
-	if (!cudaError && bestGlobalCost < 0xffffffff)	{
+	if (!cudaError && bestScheduleCost < 0xffffffff)	{
 		solutionComputed = true;
 	}
 
@@ -636,36 +705,95 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	#endif
 }
 
-uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, uint16_t *startTimesWriter, uint16_t *startTimesWriterById)	const	{
-	bool freeMem = false;
-	uint16_t scheduleLength = 0;
-	SourcesLoad load(numberOfResources,capacityOfResources);
-	if (startTimesWriterById == NULL)	{
-		startTimesWriterById = new uint16_t[numberOfActivities];
-		freeMem = true;
-	}
-	memset(startTimesWriterById, 0, sizeof(uint16_t)*numberOfActivities);
+void ScheduleSolver::printBestSchedule(bool verbose, ostream& output)	const	{
+	printSchedule(bestScheduleOrder, verbose, output);
+}
 
-	for (uint16_t i = 0; i < numberOfActivities; ++i)	{
-		uint16_t activityId = order[i], start = 0;
-		for (uint16_t j = 0; j < numberOfPredecessors[activityId]; ++j)	{
-			uint16_t predecessorId = activitiesPredecessors[activityId][j];
-			start = max(startTimesWriterById[predecessorId]+activitiesDuration[predecessorId], start);
+uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, const uint16_t * const * const& relatedActivities,
+	       	const uint16_t * const& numberOfRelatedActivities, uint16_t *& timeValuesById, bool forwardEvaluation) const {
+	SourcesLoad sourcesLoad(numberOfResources, capacityOfResources, upperBoundMakespan);
+
+	uint32_t scheduleLength = 0;
+	for (uint32_t i = 0; i < numberOfActivities; ++i)	{
+		uint32_t start = 0;
+		uint32_t activityId = order[forwardEvaluation == true ? i : numberOfActivities-i-1];
+		for (uint32_t j = 0; j < numberOfRelatedActivities[activityId]; ++j)	{
+			uint32_t relatedActivityId = relatedActivities[activityId][j];
+			start = max(timeValuesById[relatedActivityId]+activitiesDuration[relatedActivityId], start);
 		}
 
-		start = max(load.getEarliestStartTime(activitiesResources[activityId]), start);
-		load.addActivity(start, start+activitiesDuration[activityId], activitiesResources[activityId]);
+		start = max(sourcesLoad.getEarliestStartTime(activitiesResources[activityId], start, activitiesDuration[activityId]), start);
+		sourcesLoad.addActivity(start, start+activitiesDuration[activityId], activitiesResources[activityId]);
 		scheduleLength = max(scheduleLength, start+activitiesDuration[activityId]);
 
-		if (startTimesWriter != NULL)
-			*(startTimesWriter++) = start;
-
-		startTimesWriterById[activityId] = start;
+		timeValuesById[activityId] = start;
 	}
 
-	if (freeMem == true)
-		delete[] startTimesWriterById; 
 	return scheduleLength;
+}
+
+uint16_t ScheduleSolver::forwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const {
+	return evaluateOrder(order, activitiesPredecessors, numberOfPredecessors, startTimesById, true);
+}
+
+uint16_t ScheduleSolver::backwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const {
+	uint16_t makespan = evaluateOrder(order, activitiesSuccessors, numberOfSuccessors, startTimesById, false);
+	// It computes the latest start time value for each activity.
+	for (uint16_t id = 0; id < numberOfActivities; ++id)
+		startTimesById[id] = makespan-startTimesById[id]-activitiesDuration[id];
+	return makespan;
+}
+
+uint16_t ScheduleSolver::shakingDownEvaluation(const uint16_t * const& order, uint16_t *bestScheduleStartTimesById) const {
+	int32_t scheduleLength = 0;
+	uint16_t bestScheduleLength = 0xffff;
+	uint16_t *currentOrder = new uint16_t[numberOfActivities];
+	uint16_t *timeValuesById = new uint16_t[numberOfActivities];
+
+	for (uint16_t i = 0; i < numberOfActivities; ++i)
+		currentOrder[i] = order[i];
+
+	while (true)	{
+		// Forward schedule...
+		scheduleLength = forwardScheduleEvaluation(currentOrder, timeValuesById);
+		if (scheduleLength < bestScheduleLength)	{
+			bestScheduleLength = scheduleLength;
+			if (bestScheduleStartTimesById != NULL)	{
+				for (uint16_t id = 0; id < numberOfActivities; ++id)
+					bestScheduleStartTimesById[id] = timeValuesById[id];
+			}
+		} else	{
+			// No additional improvement can be found...
+			break;
+		}
+
+		// It computes the earliest activities finish time.
+		for (uint16_t id = 0; id < numberOfActivities; ++id)
+			timeValuesById[id] += activitiesDuration[id];
+
+		// Sort for backward phase..
+		insertSort(currentOrder, timeValuesById, numberOfActivities);
+
+		// Backward phase.
+		int32_t scheduleLengthBackward = backwardScheduleEvaluation(currentOrder, timeValuesById);
+		int32_t diffCmax = scheduleLength-scheduleLengthBackward;
+
+		// It computes the latest start time of activities.
+		for (uint16_t id = 0; id < numberOfActivities; ++id)	{
+			if (((int32_t) timeValuesById[id])+diffCmax > 0)
+				timeValuesById[id] += diffCmax;
+			else
+				timeValuesById[id] = 0;
+		}
+
+		// Sort for forward phase..
+		insertSort(currentOrder, timeValuesById, numberOfActivities);
+	}
+
+	delete[] currentOrder;
+	delete[] timeValuesById;
+
+	return bestScheduleLength;
 }
 
 uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t * const& startTimesById)	const	{
@@ -678,46 +806,6 @@ uint32_t ScheduleSolver::computePrecedencePenalty(const uint16_t * const& startT
 		}
 	}
 	return penalty;
-}
-
-void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool verbose, ostream& output)	const	{
-	if (solutionComputed == true)	{
-		uint16_t *startTimes = new uint16_t[numberOfActivities];
-		uint16_t *startTimesById = new uint16_t[numberOfActivities];
-
-		uint16_t scheduleLength = evaluateOrder(scheduleOrder, startTimes, startTimesById);
-		uint32_t precedencePenalty = computePrecedencePenalty(startTimesById);
-
-		if (verbose == true)	{
-			output<<"start\tactivities"<<endl;
-			for (uint16_t c = 0; c <= scheduleLength; ++c)	{
-				bool first = true;
-				for (uint16_t id = 0; id < numberOfActivities; ++id)	{
-					if (startTimesById[id] == c)	{
-						if (first == true)	{
-							output<<c<<":\t"<<id+1;
-							first = false;
-						} else {
-							output<<" "<<id+1;
-						}
-					}
-				}
-				if (!first) output<<endl;
-			}
-			output<<"Schedule length: "<<scheduleLength<<endl;
-			output<<"Precedence penalty: "<<precedencePenalty<<endl;
-			output<<"Critical path makespan: "<<criticalPathMakespan<<endl; 
-			output<<"Schedule solve time: "<<totalRunTime<<" s"<<endl;
-			output<<"Total number of evaluated schedules: "<<numberOfEvaluatedSchedules<<endl;
-		} else {
-			output<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]\t"<<numberOfEvaluatedSchedules<<endl; 
-		}
-
-		delete[] startTimesById;
-		delete[] startTimes;
-	} else {
-		output<<"Solution hasn't been computed yet!"<<endl;
-	}
 }
 
 bool ScheduleSolver::checkSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, uint16_t i, uint16_t j) const	{
@@ -737,6 +825,54 @@ bool ScheduleSolver::checkSwapPrecedencePenalty(const uint16_t * const& order, c
 	return true;
 }
 
+void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool verbose, ostream& output)	const	{
+	if (solutionComputed == true)	{
+		uint16_t *startTimesById = new uint16_t[numberOfActivities];
+		uint16_t scheduleLength = shakingDownEvaluation(scheduleOrder, startTimesById);
+		uint16_t precedencePenalty = computePrecedencePenalty(startTimesById);
+	
+		if (verbose == true)	{
+			output<<"start\tactivities"<<endl;
+			for (uint16_t c = 0; c <= scheduleLength; ++c)	{
+				bool first = true;
+				for (uint16_t id = 0; id < numberOfActivities; ++id)	{
+					if (startTimesById[id] == c)	{
+						if (first == true)	{
+							output<<c<<":\t"<<id+1;
+							first = false;
+						} else {
+							output<<" "<<id+1;
+						}
+					}
+				}
+				if (!first)	output<<endl;
+			}
+			output<<"Schedule length: "<<scheduleLength<<endl;
+			output<<"Precedence penalty: "<<precedencePenalty<<endl;
+			output<<"Critical path makespan: "<<criticalPathMakespan<<endl;
+			output<<"Schedule solve time: "<<totalRunTime<<" s"<<endl;
+			output<<"Total number of evaluated schedules: "<<numberOfEvaluatedSchedules<<endl;
+		}	else	{
+			output<<scheduleLength<<"+"<<precedencePenalty<<" "<<criticalPathMakespan<<"\t["<<totalRunTime<<" s]\t"<<numberOfEvaluatedSchedules<<endl;
+		} 
+		delete[] startTimesById;
+	} else {
+		output<<"Solution hasn't been computed yet!"<<endl;
+	}
+}
+
+void ScheduleSolver::convertStartTimesById2ActivitiesOrder(uint16_t *order, const uint16_t * const& startTimesById) const {
+	insertSort(order, startTimesById, numberOfActivities);
+}
+
+void ScheduleSolver::insertSort(uint16_t* order, const uint16_t * const& timeValuesById, const int32_t& size) {
+	for (int32_t i = 1; i < size; ++i)	{
+		for (int32_t j = i; (j > 0) && ((timeValuesById[order[j]] < timeValuesById[order[j-1]]) == true); --j)	{
+			swap(order[j], order[j-1]);
+		}
+	}
+}
+
 void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t& numberOfSwaps)	{
 	uint32_t performedSwaps = 0;
 	while (performedSwaps < numberOfSwaps)  {
@@ -750,13 +886,11 @@ void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t 
 	}
 }
 
-void ScheduleSolver::printBestSchedule(bool verbose, ostream& output)	const	{
-	printSchedule(bestScheduleOrder, verbose, output);
-}
-
 void ScheduleSolver::freeCudaMemory()	{
-	for (int i = 0; i < 3; ++i)
+	for (int i = 0; i < 5; ++i)
 		unbindTexture(i);
+	cudaFree(cudaData.cudaSuccessorsIdxsArray);
+	cudaFree(cudaData.cudaSuccessorsArray);
 	cudaFree(cudaData.activitiesDuration);
 	cudaFree(cudaPredecessorsArray);
 	cudaFree(cudaPredecessorsIdxsArray);

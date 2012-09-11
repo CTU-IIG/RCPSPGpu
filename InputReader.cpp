@@ -286,6 +286,7 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 	if (!output)
 		throw runtime_error("writeHeaderFile: Cannot write to header file! Check permision!");
 
+	uint32_t maxSumOfFloats = 0;
 	uint16_t maxNumberOfActivities = 0, maxNumberOfResources = 0, maxCapacityOfResource = 0, maxTotalCapacity = 0;
 
 	for (vector<string>::const_iterator it = inputFiles.begin(); it != inputFiles.end(); ++it)	{
@@ -295,6 +296,10 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 		maxNumberOfActivities = max(maxNumberOfActivities, reader.numberOfActivities);
 		maxNumberOfResources = max(maxNumberOfResources, (uint16_t) reader.totalNumberOfResources);
 		maxCapacityOfResource = max(maxCapacityOfResource, (uint16_t) *max_element(reader.capacityOfResources, reader.capacityOfResources+reader.totalNumberOfResources));
+		uint32_t sumOfFloats = 0;
+		for (uint16_t a = 0; a < reader.numberOfActivities; ++a)
+			sumOfFloats += reader.activitiesDuration[a];
+		maxSumOfFloats = max(maxSumOfFloats, sumOfFloats);
 
 		uint16_t totalCapacity = 0;
 		for (uint8_t *ptr = reader.capacityOfResources; ptr < reader.capacityOfResources+reader.totalNumberOfResources; ++ptr)	{
@@ -310,6 +315,7 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 	output<<"#define NUMBER_OF_RESOURCES "<<maxNumberOfResources<<endl;
 	output<<"#define MAXIMUM_CAPACITY_OF_RESOURCE "<<maxCapacityOfResource<<endl;
 	output<<"#define TOTAL_SUM_OF_CAPACITY "<<maxTotalCapacity<<endl;
+	output<<"#define MAXIMAL_SUM_OF_FLOATS "<<maxSumOfFloats<<endl;
 	output<<endl;
 	output<<"/* Hash constants. */"<<endl;
 	output<<"#define HASH_TABLE_SIZE 16777216"<<endl;

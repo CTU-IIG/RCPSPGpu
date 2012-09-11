@@ -16,7 +16,9 @@
 enum TextureName	{
 	ACTIVITIES_RESOURCES = 0,
 	PREDECESSORS = 1,
-	PREDECESSORS_INDICES = 2
+	PREDECESSORS_INDICES = 2,
+	SUCCESSORS = 3,
+	SUCCESSORS_INDICES = 4
 };
 
 /*!
@@ -135,6 +137,12 @@ struct CudaData {
 
 	//! Number of evaluated schedules.
 	uint64_t *evaluatedSchedules;
+
+	//! Switch that select evaluation algorithm for the resources (time resolution or capacity resolution).
+	bool capacityResolutionAlgorithm;
+
+	//! The length of the critical path without resources restrictions.
+	uint32_t criticalPathLength;
 };
 
 /* TEXTURE HELPER FUNCTIONS */
