@@ -30,6 +30,8 @@
 #define DEFAULT_NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR 2
 //! Maximal value of read counter then diversification will be called.
 #define DEFAULT_MAXIMAL_VALUE_OF_READ_COUNTER 3
+//! If you want to write the best schedule to a file set this variable to 1.
+#define DEFAULT_WRITE_RESULT_FILE 0
 
 #endif
 

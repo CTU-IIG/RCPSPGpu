@@ -36,6 +36,8 @@ namespace ConfigureRCPSP {
 	extern uint32_t MAXIMAL_VALUE_OF_READ_COUNTER;
 	//! If this variable is set to true then tabu hash will be used.
 	extern bool USE_TABU_HASH;
+	//! Do you want to write a result file with the encoded best schedule? 
+	extern bool WRITE_RESULT_FILE;
 }
 
 #endif

@@ -3,6 +3,11 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <iterator>
+#include <fstream>
+#include <list>
+#include <map>
+#include <set>
 #include <stdexcept>
 
 #ifdef __GNUC__
@@ -108,7 +113,6 @@ void ScheduleSolver::createInitialSolution(uint16_t *activitiesOrder)	{
 	bool anyActivity = true;
 
 	while (anyActivity == true)	{
-
 		anyActivity = false;
 		memset(newCurrentLevel, 0, sizeof(uint8_t)*numberOfActivities);
 		for (uint16_t activityId = 0; activityId < numberOfActivities; ++activityId)	{
@@ -183,12 +187,6 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	}
 
 	/* CREATE SUCCESSORS MATRIX + COMPUTE CRITICAL PATH MAKESPAN */
-	int32_t **distanceMatrix = new int32_t*[numberOfActivities];
-	for (uint32_t i = 0; i < numberOfActivities; ++i)	{
-		distanceMatrix[i] = new int32_t[numberOfActivities];
-		memset(distanceMatrix[i], -1, sizeof(int32_t)*numberOfActivities);
-	}
-
 	uint32_t successorsMatrixSize = numberOfActivities*numberOfActivities/8;
 	if ((numberOfActivities*numberOfActivities) % 8 != 0)
 		++successorsMatrixSize;
@@ -201,33 +199,32 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 			uint16_t activityId = i;
 			uint16_t successorId = activitiesSuccessors[i][j];
 			uint32_t bitPossition = activityId*numberOfActivities+successorId;
-			uint32_t bitIndex = bitPossition%8;
+			uint32_t bitIndex = bitPossition % 8;
 			uint32_t byteIndex = bitPossition/8;
 			successorsMatrix[byteIndex] |= (1<<bitIndex);
-			distanceMatrix[activityId][successorId] = activitiesDuration[activityId]; 
 		}
 	}
 
-	for (uint32_t k = 0; k < numberOfActivities; ++k)	{
-		#pragma omp parallel for collapse(2) schedule(dynamic,512) num_threads(4)
-		for (uint32_t i = 0; i < numberOfActivities; ++i)	{
-			for (uint32_t j = 0; j < numberOfActivities; ++j)	{
-				if (distanceMatrix[i][k] != -1 && distanceMatrix[k][j] != -1)	{
-					if (distanceMatrix[i][j] != -1)	{
-						if (distanceMatrix[i][j] < distanceMatrix[i][k]+distanceMatrix[k][j]) 
-							distanceMatrix[i][j] = distanceMatrix[i][k]+distanceMatrix[k][j]; 
-					} else {
-						distanceMatrix[i][j] = distanceMatrix[i][k]+distanceMatrix[k][j]; 
-					}
-				}
-			}
-		}
-	}
-
+	// The longest path from the start activity to the end activity is computed.
+	uint16_t *leftRightLongestPaths = computeLowerBounds(0);
 	if (numberOfActivities > 0)
-		criticalPathMakespan = distanceMatrix[0][numberOfActivities-1];
+		criticalPathMakespan = leftRightLongestPaths[numberOfActivities-1];
 	else
 		criticalPathMakespan = -1;
+	delete[] leftRightLongestPaths;
+
+	/* THE TRANSFORMED LONGEST PATHS */
+
+	/*
+	 * It transformes the instance graph. Directions of edges are changed.
+	 * The longest paths are computed from the end dummy activity to the others.
+	 * After that the graph is transformed back.
+	 */
+	swap(numberOfSuccessors, numberOfPredecessors);
+	swap(activitiesSuccessors, activitiesPredecessors);
+	uint16_t *longestPaths = computeLowerBounds(numberOfActivities-1, true);
+	swap(numberOfSuccessors, numberOfPredecessors);
+	swap(activitiesSuccessors, activitiesPredecessors);
 	
 	/* CREATE INITIAL START SET SOLUTIONS */
 	srand(time(NULL));
@@ -272,7 +269,9 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	cudaData.maximalValueOfReadCounter = ConfigureRCPSP::MAXIMAL_VALUE_OF_READ_COUNTER;
 	cudaData.numberOfDiversificationSwaps = ConfigureRCPSP::DIVERSIFICATION_SWAPS;
 	// Select evaluation algorithm.
-	if (numberOfActivities < 150)	{
+	if (numberOfActivities < 100)	{
+		cudaData.capacityResolutionAlgorithm = false;
+	} else if (numberOfActivities >= 100 && numberOfActivities < 140)	{
 		// It computes required parameters.
 		double branchFactor;
 		uint32_t sumOfCapacities = 0, sumOfSuccessors = 0;
@@ -539,16 +538,19 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 	if (!cudaError && bindTexture(cudaSuccessorsIdxsArray, numberOfActivities+1, SUCCESSORS_INDICES) != cudaSuccess)	{
 		cudaError = errorHandler(26);
 	}
+	
+	/* COPY THE LONGEST PATH TO THE CONSTANT MEMORY */
+	if (!cudaError && memcpyToSymbol((void*) longestPaths, numberOfActivities, THE_LONGEST_PATHS) != cudaSuccess)	{
+		cudaError = errorHandler(27);
+	}
 
 
 	/* FREE ALLOCATED TEMPORARY RESOURCES */
-	for (uint32_t i = 0; i < numberOfActivities; ++i)
-		delete[] distanceMatrix[i];
-	delete[] distanceMatrix;
 	delete[] successorsMatrix;
 	delete[] resIdxs;
 	delete[] randomSchedules;
 	delete[] infoAboutSchedules;
+	delete[] longestPaths;
 	delete[] reqResLin;
 	delete[] linSucArray;
 	delete[] linPredArray;
@@ -563,6 +565,8 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 bool ScheduleSolver::errorHandler(int16_t phase)	{
 	cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 	switch (phase)	{
+		case 27:
+			unbindTexture(SUCCESSORS_INDICES);
 		case 26:
 			cudaFree(cudaSuccessorsIdxsArray);
 		case 25:
@@ -709,6 +713,187 @@ void ScheduleSolver::printBestSchedule(bool verbose, ostream& output)	const	{
 	printSchedule(bestScheduleOrder, verbose, output);
 }
 
+void ScheduleSolver::writeBestScheduleToFile(const string& fileName) {
+	ofstream out(fileName.c_str(), ios::out | ios::binary | ios::trunc);
+
+	/* WRITE INTANCE DATA */
+	uint32_t numberOfActivitiesUint32 = numberOfActivities, numberOfResourcesUint32 = numberOfResources;
+	out.write((const char*) &numberOfActivitiesUint32, sizeof(uint32_t));
+	out.write((const char*) &numberOfResourcesUint32, sizeof(uint32_t));
+
+	uint32_t *activitiesDurationUint32 = convertArrayType<uint8_t, uint32_t>(activitiesDuration, numberOfActivities);
+	out.write((const char*) activitiesDurationUint32, numberOfActivities*sizeof(uint32_t));
+	uint32_t *capacityOfResourcesUint32 = convertArrayType<uint8_t, uint32_t>(capacityOfResources, numberOfResources);
+	out.write((const char*) capacityOfResourcesUint32, numberOfResources*sizeof(uint32_t));
+	for (uint32_t i = 0; i < numberOfActivities; ++i)	{
+		uint32_t *activityRequiredResourcesUint32 = convertArrayType<uint8_t, uint32_t>(activitiesResources[i], numberOfResources);
+		out.write((const char*) activityRequiredResourcesUint32, numberOfResources*sizeof(uint32_t));
+		delete[] activityRequiredResourcesUint32;
+	}
+
+	uint32_t *numberOfSuccessorsUint32 = convertArrayType<uint16_t, uint32_t>(numberOfSuccessors, numberOfActivities);
+	out.write((const char*) numberOfSuccessorsUint32, numberOfActivities*sizeof(uint32_t));
+	for (uint32_t i = 0; i < numberOfActivities; ++i)	{
+		uint32_t *activitySuccessorsUint32 = convertArrayType<uint16_t, uint32_t>(activitiesSuccessors[i], numberOfSuccessors[i]);
+		out.write((const char*) activitySuccessorsUint32, numberOfSuccessors[i]*sizeof(uint32_t));
+		delete[] activitySuccessorsUint32;
+	}
+
+	uint32_t *numberOfPredecessorsUint32 = convertArrayType<uint16_t, uint32_t>(numberOfPredecessors, numberOfActivities);
+	out.write((const char*) numberOfPredecessorsUint32, numberOfActivities*sizeof(uint32_t));
+	for (uint32_t i = 0; i < numberOfActivities; ++i)	{
+		uint32_t *activityPredecessorsUint32 = convertArrayType<uint16_t, uint32_t>(activitiesPredecessors[i], numberOfPredecessors[i]);
+		out.write((const char*) activityPredecessorsUint32, numberOfPredecessors[i]*sizeof(uint32_t));
+		delete[] activityPredecessorsUint32;
+	}
+
+	delete[] numberOfPredecessorsUint32;
+	delete[] numberOfSuccessorsUint32;
+	delete[] capacityOfResourcesUint32;
+	delete[] activitiesDurationUint32;
+
+	/* WRITE RESULTS */
+	uint16_t *startTimesById = new uint16_t[numberOfActivities], *copyOrder = new uint16_t[numberOfActivities];
+	uint32_t scheduleLength = shakingDownEvaluation(bestScheduleOrder, startTimesById);
+
+	uint16_t *copyWr = copyOrder;
+	copy(bestScheduleOrder, bestScheduleOrder+numberOfActivities, copyWr);
+	convertStartTimesById2ActivitiesOrder(copyOrder, startTimesById);
+
+	out.write((const char*) &scheduleLength, sizeof(uint32_t));
+	uint32_t *copyOrderUint32 = convertArrayType<uint16_t, uint32_t>(copyOrder, numberOfActivities);
+	out.write((const char*) copyOrderUint32, numberOfActivities*sizeof(uint32_t));
+	uint32_t *startTimesByIdUint32 = convertArrayType<uint16_t, uint32_t>(startTimesById, numberOfActivities);
+	out.write((const char*) startTimesByIdUint32, numberOfActivities*sizeof(uint32_t));
+
+	delete[] startTimesByIdUint32;
+	delete[] copyOrderUint32;
+	delete[] startTimesById;
+	delete[] copyOrder;
+
+	out.close();
+}
+
+uint16_t* ScheduleSolver::computeLowerBounds(const uint16_t& startActivityId, const bool& energyReasoning) const {
+	// The first dummy activity is added to list.
+	list<uint16_t> expandedNodes(1, startActivityId);
+	// We have to remember closed activities. (the bound of the activity is determined)
+	bool *closedActivities = new bool[numberOfActivities];
+	fill(closedActivities, closedActivities+numberOfActivities, false);
+	// The longest path from the start activity to the activity at index "i".
+	uint16_t *maxDistances = new uint16_t[numberOfActivities];
+	fill(maxDistances, maxDistances+numberOfActivities, 0);
+	// All branches that go through nodes are saved.
+	// branches[i][j] = p -> The p-nd branch that started in the node j goes through node i.
+	map<uint16_t, uint16_t> * branches = new map<uint16_t, uint16_t>[numberOfActivities];
+
+	while (!expandedNodes.empty())	{
+		uint16_t activityId;
+		uint16_t minimalStartTime;
+		// We select the first activity with all predecessors closed.
+		list<uint16_t>::iterator lit = expandedNodes.begin();
+		while (lit != expandedNodes.end())	{
+			activityId = *lit;
+			if (closedActivities[activityId] == false)	{
+				minimalStartTime = 0;
+				bool allPredecessorsClosed = true;
+				vector<map<uint16_t, uint16_t> > predecessorsBranches;
+				uint16_t *activityPredecessors = activitiesPredecessors[activityId];
+				for (uint16_t* p = activityPredecessors; p < activityPredecessors+numberOfPredecessors[activityId]; ++p)	{
+					if (closedActivities[*p] == false)	{
+						allPredecessorsClosed = false;
+						break;
+					} else {
+						// It updates the maximal distance from the start activity to the activity "activityId".
+						minimalStartTime = max(maxDistances[*p]+activitiesDuration[*p], minimalStartTime);
+						if (numberOfPredecessors[activityId] > 1 && energyReasoning)
+							predecessorsBranches.push_back(branches[*p]);
+					}
+				}
+				if (allPredecessorsClosed)	{
+					if (numberOfPredecessors[activityId] > 1 && energyReasoning) {
+						// Output branches are found out for the node with more predecessors.
+						map<uint16_t, uint16_t> newBranches;
+						set<uint16_t> startNodesOfMultiPaths;
+						for (uint32_t k = 0; k < predecessorsBranches.size(); ++k)	{
+							map<uint16_t, uint16_t>& m = predecessorsBranches[k];
+							for (map<uint16_t, uint16_t>::const_iterator mit = m.begin(); mit != m.end(); ++mit)	{
+								map<uint16_t, uint16_t>::const_iterator sit;
+								if ((sit = newBranches.find(mit->first)) == newBranches.end())	{
+									newBranches[mit->first] = mit->second;
+								} else {
+									// The branch number has to be checked.
+									if (mit->second != sit->second)	{
+										// Multi-paths were detected! New start node is stored.
+										startNodesOfMultiPaths.insert(mit->first);
+									}
+								}
+							}
+						}
+						branches[activityId] = newBranches;
+						// If more than one path exists to the node "activityId", then the resource restrictions
+						// are taken into accout to improve lower bound.
+						uint16_t minimalResourceStartTime = 0;
+						for (set<uint16_t>::const_iterator sit = startNodesOfMultiPaths.begin(); sit != startNodesOfMultiPaths.end(); ++sit)	{
+							// Vectors are sorted by activity id's.
+							vector<uint16_t> allSuccessors = getAllActivitySuccessors(*sit);
+							vector<uint16_t> allPredecessors = getAllActivityPredecessors(activityId);
+							// The vector of all activities between the activity "i" and activity "j".
+							vector<uint16_t> intersectionOfActivities;
+							set_intersection(allPredecessors.begin(), allPredecessors.end(), allSuccessors.begin(),
+									allSuccessors.end(), back_inserter(intersectionOfActivities));
+							for (uint8_t k = 0; k < numberOfResources; ++k)	{
+								uint32_t sumOfEnergy = 0, timeInterval;
+								for (uint16_t i = 0; i < intersectionOfActivities.size(); ++i)	{
+									uint16_t innerActivityId = intersectionOfActivities[i];
+									sumOfEnergy += activitiesDuration[innerActivityId]*activitiesResources[innerActivityId][k];
+								}
+
+								timeInterval = sumOfEnergy/capacityOfResources[k];
+								if ((sumOfEnergy % capacityOfResources[k]) != 0)
+									++timeInterval;
+								
+								minimalResourceStartTime = max(minimalResourceStartTime, 
+										maxDistances[*sit]+activitiesDuration[*sit]+timeInterval); 
+							}
+						}
+						minimalStartTime = max(minimalStartTime, minimalResourceStartTime);
+					}
+					break;
+				}
+
+				++lit;
+			} else {
+				lit = expandedNodes.erase(lit);
+			}
+		}
+		
+		if (lit != expandedNodes.end())	{
+			closedActivities[activityId] = true;
+			maxDistances[activityId] = minimalStartTime;
+			expandedNodes.erase(lit);
+			uint32_t numberOfSuccessorsOfClosedActivity = numberOfSuccessors[activityId];
+			for (uint32_t s = 0; s < numberOfSuccessorsOfClosedActivity; ++s)	{
+				uint32_t successorId = activitiesSuccessors[activityId][s];
+				if (numberOfPredecessors[successorId] <= 1 && energyReasoning)	{
+					branches[successorId] = branches[activityId];
+					if (numberOfSuccessorsOfClosedActivity > 1)	{
+						branches[successorId][activityId] = s;
+					}
+				}
+				expandedNodes.push_back(successorId);
+			}
+		} else {
+			break;
+		}
+	}
+
+	delete[] branches;
+	delete[] closedActivities; 
+
+	return maxDistances;
+}
+
 uint16_t ScheduleSolver::evaluateOrder(const uint16_t * const& order, const uint16_t * const * const& relatedActivities,
 	       	const uint16_t * const& numberOfRelatedActivities, uint16_t *& timeValuesById, bool forwardEvaluation) const {
 	SourcesLoad sourcesLoad(numberOfResources, capacityOfResources, upperBoundMakespan);
@@ -838,10 +1023,10 @@ void ScheduleSolver::printSchedule(const uint16_t * const& scheduleOrder, bool v
 				for (uint16_t id = 0; id < numberOfActivities; ++id)	{
 					if (startTimesById[id] == c)	{
 						if (first == true)	{
-							output<<c<<":\t"<<id+1;
+							output<<c<<":\t"<<id;
 							first = false;
 						} else {
-							output<<" "<<id+1;
+							output<<" "<<id;
 						}
 					}
 				}
@@ -884,6 +1069,43 @@ void ScheduleSolver::makeDiversification(uint16_t * const& order, const uint8_t 
 			++performedSwaps;
 		}
 	}
+}
+
+vector<uint16_t> ScheduleSolver::getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related) const	{
+	vector<uint16_t> relatedActivities;
+	bool *activitiesSet = new bool[numberOfActivities];
+	fill(activitiesSet, activitiesSet+numberOfActivities, false);
+
+	for (uint16_t j = 0; j < numberOfRelated[activityId]; ++j)	{
+		activitiesSet[related[activityId][j]] = true;
+		vector<uint16_t> indirectRelated = getAllRelatedActivities(related[activityId][j], numberOfRelated, related);
+		for (vector<uint16_t>::const_iterator it = indirectRelated.begin(); it != indirectRelated.end(); ++it)
+			activitiesSet[*it] = true;
+	}
+
+	for (uint16_t id = 0; id < numberOfActivities; ++id)	{
+		if (activitiesSet[id] == true)
+			relatedActivities.push_back(id);
+	}
+	
+	delete[] activitiesSet;
+	return relatedActivities;
+}
+
+vector<uint16_t> ScheduleSolver::getAllActivitySuccessors(const uint16_t& activityId) const	{
+	return getAllRelatedActivities(activityId, numberOfSuccessors, activitiesSuccessors);
+}
+
+vector<uint16_t> ScheduleSolver::getAllActivityPredecessors(const uint16_t& activityId) const 	{
+	return getAllRelatedActivities(activityId, numberOfPredecessors, activitiesPredecessors);
+}
+
+template <class X, class Y>
+Y* ScheduleSolver::convertArrayType(X* array, size_t length)	{
+	Y* convertedArray = new Y[length];
+	for (uint32_t i = 0; i < length; ++i)
+		convertedArray[i] = array[i];
+	return convertedArray;
 }
 
 void ScheduleSolver::freeCudaMemory()	{

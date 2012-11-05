@@ -47,6 +47,11 @@ class ScheduleSolver {
 		 * \brief Print best found schedule, schedule length and computational time.
 		 */
 		void printBestSchedule(bool verbose = true, std::ostream& output = std::cout) const;
+		/*!
+		 * \param fileName The name of the file where results will be written.
+		 * \brief It writes required data structures and the best schedule to the given file.
+		 */
+		void writeBestScheduleToFile(const std::string& fileName);
 
 		//! Free all allocated resources (CPU + GPU).
 		~ScheduleSolver();
@@ -72,6 +77,14 @@ class ScheduleSolver {
 		 */
 		bool errorHandler(int16_t phase);
 		
+		/*!
+		 * \param startActivityId The id of the start activity of the project.
+		 * \param energyReasoning The energy requirements are taken into account if energyReasoning variable is set to true.
+		 * \return The earliest start time for each activity.
+		 * \brief Lower bounds of the earliest start time values are computed for each activity.
+		 */
+		uint16_t* computeLowerBounds(const uint16_t& startActivityId, const bool& energyReasoning = false) const;		
+
 		/*!
 		 * \param order Activities order.
 		 * \param relatedActivities It's array of successors or predecessors. It depends on a way of evaluation (forward, backward).
@@ -154,6 +167,32 @@ class ScheduleSolver {
 		 */
 		void makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t& numberOfSwaps);
 		
+		/*!
+		 * \param activityId The activity from which all related activities are found.
+		 * \param numberOfRelated The number of related activities for each activity.
+		 * \param related The related (= successors || predecessors) activities for each activity in the project.
+		 * \return It returns all activityId's successors or predecessors.
+		 */
+		std::vector<uint16_t> getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related) const;
+		/*!
+		 * \param activityId Identification of the activity.
+		 * \return It returns all activityId's successors.
+		 */
+		std::vector<uint16_t> getAllActivitySuccessors(const uint16_t& activityId) const;
+		/*!
+		 * \param activityId Identification of the activity.
+		 * \return It returns all activityId's predecessors.
+		 */
+		std::vector<uint16_t> getAllActivityPredecessors(const uint16_t& activityId) const;		
+
+		/*!
+		 * \param array The read-only array which will be copied.
+		 * \param length The length of the array.
+		 * \return The converted copy of the input array.
+		 */
+		template<class X, class Y>
+		static Y* convertArrayType(X* array, size_t length);
+
 		//! Free all allocated Cuda resources.
 		void freeCudaMemory();
 

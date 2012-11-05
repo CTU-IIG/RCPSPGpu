@@ -21,6 +21,11 @@ enum TextureName	{
 	SUCCESSORS_INDICES = 4
 };
 
+//! It defines the names of the structures in the device constant memory.
+enum ConstantMemoryNames	{
+	THE_LONGEST_PATHS = 0
+};
+
 /*!
  * \struct MoveIndices
  * \brief Move indices are stored at this structure.
@@ -161,6 +166,17 @@ int bindTexture(void *texData, int32_t arrayLength, int option);
  * \brief Unbind a specified texture.
  */
 int unbindTexture(int option);
+
+/* CONSTANT MEMORY HELPER FUNCTION */
+
+/*!
+ * \param source The array of values which will be copied to the constant device memory.
+ * \param arrayLength The length of the source array.
+ * \param option The name of the structure to bind with.
+ * \return Cuda error code or cuda success.
+ * \brief The function copies input array to the GPU constant memory.
+ */
+int memcpyToSymbol(void *source, int32_t arrayLength, int option);
 
 /* RUN GLOBAL FUNCTION */
 

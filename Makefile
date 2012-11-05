@@ -17,7 +17,7 @@ OPTIMISATION = -O3
 endif
 
 CAPABILITY = --generate-code arch=compute_20,code=sm_21 --maxrregcount=32
-GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe,-fopenmp
+GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe
 
 # Compile all.
 build: CreateHeaderFile RCPSPGpu

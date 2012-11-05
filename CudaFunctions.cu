@@ -30,6 +30,10 @@ texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsTex;
 //! Texture reference of successors indices.
 texture<uint16_t,1,cudaReadModeElementType> cudaSuccessorsIndicesTex;
 
+//! The longest paths from the end dummy activity to the others in the transformed graph.
+__constant__ uint16_t rightLeftLongestPaths[NUMBER_OF_ACTIVITIES];
+
+
 /* CUDA BIND TEXTURES */
 
 int bindTexture(void *texData, int32_t arrayLength, int option)	{
@@ -64,6 +68,16 @@ int unbindTexture(int option)	{
 			return cudaUnbindTexture(cudaSuccessorsIndicesTex);
 		default:
 			cerr<<"unbindTextures: Invalid option!"<<endl;
+	}
+	return cudaErrorInvalidValue;
+}
+
+int memcpyToSymbol(void *source, int32_t arrayLength, int option)	{
+	switch (option)	{
+		case THE_LONGEST_PATHS:
+			return cudaMemcpyToSymbol((const char*) source, (void*) rightLeftLongestPaths, arrayLength*sizeof(uint16_t));
+		default:
+			cerr<<"memcpyToSymbol: Invalid option!"<<endl;
 	}
 	return cudaErrorInvalidValue;
 }
@@ -364,6 +378,15 @@ __device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, co
 	return true;
 }
 
+/*!
+ * \param numAct The number of activities.
+ * \param successorsMatrix Binary matrix of successors.
+ * \param activitiesDuration Duration of each activity.
+ * \param startTimesById Array of start time values of the scheduled activities ordered by ID's.
+ * \return The precedence penalty.
+ * \brief It finds out all precedence penalties and computes penalty.
+ * \note The penalty should be zero since only non-precedence breaking moves are allowed.
+ */
 __device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *successorsMatrix, uint8_t *activitiesDuration, uint16_t *startTimesById)  {
 	uint32_t penalty = 0;
 	for (uint16_t id1 = 0; id1 < numAct; ++id1)        {
@@ -376,6 +399,22 @@ __device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *succe
 		}
 	}
 	return penalty;
+}
+
+/*!
+ * \param numberOfActivities The number of the activities in the project.
+ * \param activitiesDuration Duration of each activity.
+ * \param makespan The best known project makespan.
+ * \param startTimesById Array of start time values of the scheduled activities ordered by ID's.
+ * \return It returns overall tardiness penalty.
+ */
+__device__ uint32_t cudaComputeTardinessPenalty(uint16_t numberOfActivities, uint8_t *activitiesDuration, uint32_t makespan, uint16_t *startTimesById)	{
+	uint32_t overhangPenalty = 0;
+	for (uint16_t id = 0; id < numberOfActivities; ++id)	{
+		if (startTimesById[id]+activitiesDuration[id]+rightLeftLongestPaths[id] > makespan)
+			overhangPenalty += startTimesById[id]+activitiesDuration[id]+rightLeftLongestPaths[id]-makespan;
+	}
+	return overhangPenalty;
 }
 
 /*!
@@ -830,6 +869,9 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j,
 					blockActivitiesDuration, blockResourceIndices,threadResourcesLoad,
 					threadStartValues, threadRemainingResourcesCapacity, threadStartTimesById, cudaData.capacityResolutionAlgorithm);
+			totalEval += cudaComputeTardinessPenalty(cudaData.numberOfActivities, blockActivitiesDuration, blockBestCost-1, threadStartTimesById);
+			if (totalEval > 0x0000ffff)
+				totalEval = 0x0000ffff;
 			totalEval <<= 16;
 			totalEval |= (curand(&threadRandState) & 0x0000ffff);
 			uint32_t hashPenalty = 0;

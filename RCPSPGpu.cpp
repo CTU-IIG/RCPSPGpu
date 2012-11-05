@@ -100,6 +100,8 @@ int rcpspGpu(int argc, char* argv[])	{
 			return 1;
 		}
 
+		if (arg == "--write-result-file" || arg == "-wrf")
+			ConfigureRCPSP::WRITE_RESULT_FILE = true;
 		if (arg == "--use-tabu-hash" || arg == "-uth")
 			ConfigureRCPSP::USE_TABU_HASH = true;
 
@@ -129,7 +131,10 @@ int rcpspGpu(int argc, char* argv[])	{
 			cout<<"\t"<<"--maximal-value-of-read-counter ARG, -mvorc ARG, ARG=POSITIVE_INTEGER"<<endl;
 			cout<<"\t\t"<<"How many times will be new (updated) set solution read without diversification."<<endl;
 			cout<<"\t\t"<<"If set solution is changed - improved, then counter is reset."<<endl;
-			cout<<"\t\t"<<"Every cuda thread performs diversification of read solution if and only if counter value is greater than ARG."<<endl<<endl;
+			cout<<"\t\t"<<"Every cuda thread performs diversification of read solution if and only if counter value is greater than ARG."<<endl;
+			cout<<"\t"<<"--write-result-file, -wrf"<<endl;
+			cout<<"\t\t"<<"Add this option if you want to write a file with the best schedule."<<endl;
+			cout<<"\t\t"<<"This file is binary."<<endl<<endl;
 			cout<<"Default values can be modified at \"DefaultConfigureRCPSP.h\" file."<<endl;
 			return 0;
 		}
@@ -140,7 +145,16 @@ int rcpspGpu(int argc, char* argv[])	{
 		bool verbose = (inputFiles.size() == 1 ? true : false);
 		for (vector<string>::const_iterator it = inputFiles.begin(); it != inputFiles.end(); ++it)	{
 			// Filename of instance.
-			string filename = *it;
+			string filename = *it, resultFilename;
+			if (ConfigureRCPSP::WRITE_RESULT_FILE == true)		{
+				int32_t i;
+				for (i = filename.size()-1; i >= 0; --i)	{
+					if (filename[i] == '.')
+						break;
+				}
+				resultFilename = string(filename, 0, i)+".res";
+			}
+			
 			InputReader reader;
 			// Read instance data.
 			reader.readFromFile(filename);
@@ -155,6 +169,9 @@ int rcpspGpu(int argc, char* argv[])	{
 				cout<<filename<<": ";
 				solver.printBestSchedule(false);
 			}
+			// Write instance data and the best schedule.
+			if (!resultFilename.empty())
+				solver.writeBestScheduleToFile(resultFilename);
 		}
 	} catch (exception& e)	{
 		cerr<<e.what()<<endl;
