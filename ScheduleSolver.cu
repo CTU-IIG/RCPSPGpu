@@ -301,7 +301,10 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 	int devId = 0;
 	cudaDeviceProp prop;
-	if (cudaGetDevice(&devId) == cudaSuccess && cudaGetDeviceProperties(&prop, devId) == cudaSuccess)	{
+	memset(&prop, 0, sizeof(cudaDeviceProp));
+	prop.major = 2; prop.minor = 0;
+
+	if (cudaChooseDevice(&devId, &prop) == cudaSuccess && cudaGetDeviceProperties(&prop, devId) == cudaSuccess && cudaSetDevice(devId) == cudaSuccess)	{
 		if (verbose == true)	{
 			cout<<"Device number: "<<devId<<endl;
 			cout<<"Device name: "<<prop.name<<endl;
@@ -323,7 +326,10 @@ bool ScheduleSolver::prepareCudaMemory(uint16_t *activitiesOrder, bool verbose)	
 
 		cudaData.sumOfCapacities = sumOfCapacity;
 		cudaData.maximalCapacityOfResource = *max_element(capacityOfResources, capacityOfResources+numberOfResources);
-		numberOfThreadsPerBlock = 512;
+		if (cudaCapability < 300)
+			numberOfThreadsPerBlock = 512;
+		else
+			numberOfThreadsPerBlock = 1024;
 
 		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
 		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array

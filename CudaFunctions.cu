@@ -75,7 +75,7 @@ int unbindTexture(int option)	{
 int memcpyToSymbol(void *source, int32_t arrayLength, int option)	{
 	switch (option)	{
 		case THE_LONGEST_PATHS:
-			return cudaMemcpyToSymbol("rightLeftLongestPaths", (void*) source, arrayLength*sizeof(uint16_t));
+			return cudaMemcpyToSymbol(rightLeftLongestPaths, (void*) source, arrayLength*sizeof(uint16_t));
 		default:
 			cerr<<"memcpyToSymbol: Invalid option!"<<endl;
 	}
