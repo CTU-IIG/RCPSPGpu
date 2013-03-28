@@ -1,7 +1,7 @@
 # Default C++ compiler.
 CPP=g++
 # Nvidia Cuda compiler.
-NVCC=nvcc
+NVCC=nvcc -lcudart
 
 INST_PATH = /usr/local/bin/
 
@@ -11,7 +11,7 @@ SRC = ConfigureRCPSP.cpp CreateHeaderFile.cpp InputReader.cpp RCPSPGpu.cpp Sourc
 
 # If yout want to analyse performance then switch -pg (gprof) should be used. Static linkage of standard C++ library (-static-libstdc++).
 ifdef DEBUG
-OPTIMISATION = --debug -G3 -O0
+OPTIMISATION = -G
 else
 OPTIMISATION = -O3
 endif

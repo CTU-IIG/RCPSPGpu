@@ -25,6 +25,11 @@
  * \brief Instance of this class is able to solve resource constrained project scheduling problem.
  */
 class ScheduleSolver {
+	//! A forward declaration of the InstanceData inner class.
+	struct InstanceData;
+	//! A forward declaration of the InstanceSolution inner class.
+	struct InstanceSolution;
+
 	public:
 		/*!
 		 * \param rcpspData Data of project instance.
@@ -46,9 +51,10 @@ class ScheduleSolver {
 		 * \param output Output stream.
 		 * \brief Print best found schedule, schedule length and computational time.
 		 */
-		void printBestSchedule(bool verbose = true, std::ostream& output = std::cout) const;
+		void printBestSchedule(bool verbose = true, std::ostream& output = std::cout);
 		/*!
-		 * \param fileName The name of the file where results will be written.
+		 * \param filename The name of the file where results will be written.
+		 * \exception invalid_argument The output file cannot be created, check the permissions.
 		 * \brief It writes required data structures and the best schedule to the given file.
 		 */
 		void writeBestScheduleToFile(const std::string& fileName);
@@ -59,17 +65,36 @@ class ScheduleSolver {
 	protected:
 
 		/*!
-		 * \param activitiesOrder Initial activities order will be written to this array.
-		 * \brief Compute predecessors and create initial activities order.
+		 * \param project The data-structure of the read instance.
+		 * \param solution The data-structure which stores an initial solution of the project instance.
+		 * \brief It initialises auxiliary data-structures of the read instance and creates the initial solution.
 		 */
-		void createInitialSolution(uint16_t *activitiesOrder);
+		static void initialiseInstanceDataAndInitialSolution(InstanceData& project, InstanceSolution& solution);
 		/*!
-		 * \param activitiesOrder Sequence of the activities.
+		 * \param project The data of the read instance.
+		 * \param solution An initial order will be written to this data-structure.
+		 * \brief An initial order of activities is created using precedence graph stored in the project data-structure.
+		 */
+		static void createInitialSolution(const InstanceData& project, InstanceSolution& solution);
+		
+		/*!
+		 * \param out The output stream where the instance data and the solution will be written.
+		 * \param project The project instance data that will be written to the output file.
+		 * \param solution The solution of the given project.
+		 * \return A reference to the output stream.
+		 * \brief The method writes the instance data and solution of the instance.
+		 */
+		static std::ofstream& writeBestScheduleToFile(std::ofstream& out, const InstanceData& project, const InstanceSolution& solution);
+		
+		/*!
+		 * \param project A read RCPSP project.
+		 * \param solution An initial solution of the read project.
 		 * \param verbose If true then more informations (Cuda info, etc.) will be showed.
 		 * \return Return true if some Cuda error will be detected.
-		 * \brief Copy required data to GPU and compute critical path makespan.
+		 * \brief Copy required data to GPU and compute a critical path makespan.
 		 */
-		bool prepareCudaMemory(uint16_t *activitiesOrder, bool verbose);
+		bool prepareCudaMemory(const InstanceData& project, InstanceSolution& solution, bool verbose);
+//		bool prepareCudaMemory(uint16_t *activitiesOrder, bool verbose);
 		/*!
 		 * \param phase Number that correspond to a location at prepareCudaMemory method.
 		 * \return Always return true.
@@ -79,111 +104,138 @@ class ScheduleSolver {
 		
 		/*!
 		 * \param startActivityId The id of the start activity of the project.
+		 * \param project The project instance in which the longest paths are computed.
 		 * \param energyReasoning The energy requirements are taken into account if energyReasoning variable is set to true.
 		 * \return The earliest start time for each activity.
 		 * \brief Lower bounds of the earliest start time values are computed for each activity.
+		 * \warning The user is responsible for freeing the allocated memory in the returned array.
 		 */
-		uint16_t* computeLowerBounds(const uint16_t& startActivityId, const bool& energyReasoning = false) const;		
-
+		static uint16_t* computeLowerBounds(const uint16_t& startActivityId, const InstanceData& project, const bool& energyReasoning = false);
+		
 		/*!
-		 * \param order Activities order.
-		 * \param relatedActivities It's array of successors or predecessors. It depends on a way of evaluation (forward, backward).
-		 * \param numberOfRelatedActivities Number of successors/predecessors for each activity.
-		 * \param timeValuesById The earliest start time values for forward evaluation
-		 * and transformed time values for backward evaluation.
+		 * \param project The instance data of the instance.
+		 * \return The method returns an estimate of the project makespan.
+		 * \brief A lower bound is computed by using the "Extended Node Packing Bound" problem.
+		 */
+		static uint16_t lowerBoundOfMakespan(const InstanceData& project);
+
+		/* TODO documentation */
+		static void createStaticTreeOfSolutions(const InstanceData& project);
+		
+		/*!
+		 * \param project The data of the instance. (activity duration, precedence edges, ...)
+		 * \param solution The current solution of the project. The order is evaluated.
+		 * \param timeValuesById The earliest start time values for forward evaluation and transformed time values for backward evaluation.
 		 * \param forwardEvaluation It determines if forward or backward schedule is evaluated.
 		 * \return Length of the schedule.
 		 * \brief Input order is evaluated and the earliest start/transformed time values are computed.
 		 * \warning Order of activities is sequence of putting to the schedule, time values don't have to be ordered.
 		 */
-		uint16_t evaluateOrder(const uint16_t * const& order, const uint16_t * const * const& relatedActivities,
-			       const uint16_t * const& numberOfRelatedActivities, uint16_t *& timeValuesById, bool forwardEvaluation) const;
+		static uint16_t evaluateOrder(const InstanceData& project, const InstanceSolution& solution, uint16_t *& timeValuesById, bool forwardEvaluation);
+
 		/*!
-		 * \param order The sequence of putting to the schedule. It's activity order.
+		 * \param project The data of the instance.
+		 * \param solution Current solution of the instance.
 		 * \param startTimesById The earliest start time values for each scheduled activity.
 		 * \return Project makespan, i.e. the length of the schedule.
 		 * \brief It evaluates order of activities and determines the earliest start time values.
 		 */
-		uint16_t forwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const;
+		static uint16_t forwardScheduleEvaluation(const InstanceData& project, const InstanceSolution& solution, uint16_t *& startTimesById);
 		/*!
-		 * \param order The sequence of putting to the schedule. It's activity order.
+		 * \param project The data-structure of the instance.
+		 * \param solution Current solution of the instance.
 		 * \param startTimesById The latest start time values for each scheduled activity.
 		 * \return Project makespan, i.e. the length of the schedule.
 		 * \brief It evaluates order (in reverse order) of activities and determines the latest start time values.
 		 */
-		uint16_t backwardScheduleEvaluation(const uint16_t * const& order, uint16_t *& startTimesById) const;
+		static uint16_t backwardScheduleEvaluation(const InstanceData& project, const InstanceSolution& solution, uint16_t *& startTimesById);
 		/*!
-		 * \param order Order of activities. It determines the order of putting to the schedule.
+		 * \param project The data-structure of the instance.
+		 * \param solution Current solution of the instance.
 		 * \param bestScheduleStartTimesById The earliest start time values for the best found schedule.
 		 * \return Project makespan, i.e. the length of the schedule.
 		 * \brief Iterative method tries to shake down activities in the schedule to ensure equally loaded resources.
 		 * Therefore, the shorter schedule could be found.
 		 */
-		uint16_t shakingDownEvaluation(const uint16_t * const& order, uint16_t *bestScheduleStartTimesById) const;
+		static uint16_t shakingDownEvaluation(const InstanceData& project, const InstanceSolution& solution, uint16_t *bestScheduleStartTimesById);
+		
 		/*!
-		 * \param startTimesById Start times of activities ordered by ID's.
+		 * \param project The data of the instance.
+		 * \param startTimesById Start time values of activities ordered by ID's.
 		 * \return Precedence penalty of the schedule.
 		 * \brief Method compute precedence penalty (= broken relation between two activities) of the schedule.
 		 * \note Because precedence free swaps and shifts are currently used, this function is only for debugging purposes.
 		 */
-		uint32_t computePrecedencePenalty(const uint16_t * const& startTimesById) const;
+		static uint16_t computePrecedencePenalty(const InstanceData& project, const uint16_t * const& startTimesById);
 		/*!
-		 * \param order Order of activities.
-		 * \param successorsMatrix Matrix of successors that is computed at prepareCudaMemory method.
+		 * \param project The data of the project.
+		 * \param solution A solution of the project.
 		 * \param i Index at activitiesOrder.
 		 * \param j Index at activitiesOrder.
 		 * \return True if and only if precedence penalty is zero else false.
-		 * \brief Method check if candidate for a swap is precedence penalty free.
+		 * \brief Method check if candidate for swap is precedence penalty free.
 		 */
-		bool checkSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, uint16_t i, uint16_t j) const;
+		static bool checkSwapPrecedencePenalty(const InstanceData& project, const InstanceSolution& solution, uint16_t i, uint16_t j);
 
 		/*!
-		 * \param order Original activities order.
+		 * \param project The data of the instance.
+		 * \param solution Current solution of the instance.
 		 * \param startTimesById The earliest start time values in the order W.
-		 * \brief It transforms the earliest start time values to the order W. The order W is written to the variable order.
+		 * \brief It transforms the earliest start time values to the order W. The order W is written to the variable solution.orderOfActivities.
 		 */
-		void convertStartTimesById2ActivitiesOrder(uint16_t *order, const uint16_t * const& startTimesById) const;
+		static void convertStartTimesById2ActivitiesOrder(const InstanceData& project, InstanceSolution& solution, const uint16_t * const& startTimesById);
 		/*!
-		 * \param order Order of activities.
+		 * \param project The data of the instance.
+		 * \param solution Current solution of the instance.
 		 * \param timeValuesById Assigned time values to activities, it is used for sorting input order.
-		 * \param size It's size of the arrays, i.e. number of project activities.
 		 * \brief Input order of activities is sorted in accordance with time values. It's stable sort.
 		 */
-		static void insertSort(uint16_t* order, const uint16_t * const& timeValuesById, const int32_t& size);
+		static void insertSort(const InstanceData& project, InstanceSolution& solution, const uint16_t * const& timeValuesById);
 		
 		/*!
-		 * \param scheduleOrder Order of activities that should be evaluated.
-		 * \param verbose If true then complete schedule will be printed else only basic information is printed.
+		 * \param project The data of the printed instance.
+		 * \param solution The solution of the instance.
+		 * \param runTime The computation time at seconds.
+		 * \param evaluatedSchedules The number of evaluated schedules during execution.
+		 * \param verbose If true then verbose mode is turn on.
 		 * \param output Output stream.
-		 * \brief Print schedule and schedule length. 
+		 * \brief Print schedule, schedule length, precedence penalty and number of evaluated schedules.
 		 */
-		void printSchedule(const uint16_t * const& scheduleOrder, bool verbose = true, std::ostream& output = std::cout) const;
+		static void printSchedule(const InstanceData& project, const InstanceSolution& solution, double runTime, uint64_t evaluatedSchedules, bool verbose = true, std::ostream& output = std::cout);
 
 		/*!
-		 * \param order Initial sequence of the activities.
-		 * \param successorsMatrix Matrix of successors that is computed at prepareCudaMemory method.
-		 * \param numberOfSwaps Number of successful (= zero precedence penalty) swaps.
-		 * \brief Random swaps are performed at initial schedule.
+		 * \param project The data of the instance.
+		 * \param solution A solution in which a diversification will be performed.
+		 * \brief Random swaps are performed when diversification is called..
 		 */
-		void makeDiversification(uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint32_t& numberOfSwaps);
+		static void makeDiversification(const InstanceData& project, InstanceSolution& solution);
+
+		/*!
+		 * \param project The data of the project instance.
+		 * \brief The method swaps directions of all precedence edges in the project data-structure.
+		 */
+		static void changeDirectionOfEdges(InstanceData& project);
 		
 		/*!
 		 * \param activityId The activity from which all related activities are found.
 		 * \param numberOfRelated The number of related activities for each activity.
 		 * \param related The related (= successors || predecessors) activities for each activity in the project.
+		 * \param numberOfActivities The total number of activities in the project.
 		 * \return It returns all activityId's successors or predecessors.
 		 */
-		std::vector<uint16_t> getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related) const;
+		static std::vector<uint16_t>* getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related, uint16_t numberOfActivities);
 		/*!
 		 * \param activityId Identification of the activity.
+		 * \param project The data of the project.
 		 * \return It returns all activityId's successors.
 		 */
-		std::vector<uint16_t> getAllActivitySuccessors(const uint16_t& activityId) const;
+		static std::vector<uint16_t>* getAllActivitySuccessors(const uint16_t& activityId, const InstanceData& project);
 		/*!
 		 * \param activityId Identification of the activity.
+		 * \param project The data of the project.
 		 * \return It returns all activityId's predecessors.
 		 */
-		std::vector<uint16_t> getAllActivityPredecessors(const uint16_t& activityId) const;		
+		static std::vector<uint16_t>* getAllActivityPredecessors(const uint16_t& activityId, const InstanceData& project);	
 
 		/*!
 		 * \param array The read-only array which will be copied.
@@ -205,42 +257,80 @@ class ScheduleSolver {
 		//! Assignment operator is forbidden.
 		ScheduleSolver& operator=(const ScheduleSolver&);
 
+		//! TODO DOC
+		template <class T>
+		static T* copyAndPush(T* array, uint32_t size, T value);
 
 		/* IMMUTABLE DATA */
+		
+		//! A static parameters of a RCPSP project.
+		struct InstanceData	{
+			//! Number of renewable sources.
+			uint8_t numberOfResources;
+			//! The capacity of the resources.
+			uint8_t *capacityOfResources;
+			//! Total number of activities.
+			uint16_t numberOfActivities;
+			//! Duration of activities.
+			uint8_t *durationOfActivities;
+			//! Activities successors;
+			uint16_t **successorsOfActivity;
+			//! Number of successors that activities.
+			uint16_t *numberOfSuccessors;
+			//! Precomputed predecessors.
+			uint16_t **predecessorsOfActivity;
+			//! Number of predecessors.
+			uint16_t *numberOfPredecessors;
+			//! Sources that are required by activities.
+			uint8_t **requiredResourcesOfActivities;
+			//! Matrix of successors. (if matrix(i,j) == 1 then "Exist precedence edge between activities i and j")
+			int8_t **matrixOfSuccessors;
+			//! Critical Path Makespan. (Critical Path Method)
+			int32_t criticalPathMakespan;
+			//! The longest paths from the end activity in the transformed graph.
+			uint16_t *rightLeftLongestPaths;
+			//! Upper bound of Cmax (sum of all activity durations).
+			uint16_t upperBoundMakespan;
+			//! All successors of an activity. Cache purposes.
+			std::vector<std::vector<uint16_t>*> allSuccessorsCache;
+			//! All predecessors of an activity. Cache purposes.
+			std::vector<std::vector<uint16_t>*> allPredecessorsCache;
+			//! The matrix of disjunctive activities.
+			bool **disjunctiveActivities;
+			//! An artificially added directed edge to the problem.
+			struct Edge {
+				//! The start node.
+				uint16_t i;
+				//! The end node.
+				uint16_t j;
+				//! A weight of the edge.
+				int32_t weight;
+			};
+			//! A list of added edges to the problem.
+			std::vector<Edge> addedEdges;
+		};
 
-		//! Number of renewable sources.
-		uint8_t numberOfResources;
-		//! Capacity of resources;
-		uint8_t *capacityOfResources;
-		//! Total number of activities.
-		uint16_t numberOfActivities;
-		//! Duration of activities.
-		uint8_t *activitiesDuration;
-		//! Activities successors;
-		uint16_t **activitiesSuccessors;
-		//! Number of successors that activities.
-		uint16_t *numberOfSuccessors;
-		//! Precomputed predecessors.
-		uint16_t **activitiesPredecessors;
-		//! Number of predecessors.
-		uint16_t *numberOfPredecessors;
-		//! Sources that are required by activities.
-		uint8_t **activitiesResources;
-		//! Critical Path Makespan. (Critical Path Method)
-		int32_t criticalPathMakespan;
-		//! Upper bound of the project duration (sum of the all time flows).
-		uint16_t upperBoundMakespan;
+		//! The data of the read instance.
+		InstanceData instance;
 		
 
 		/* MUTABLE DATA */	
 
-		//! If solution is successfully computed then solutionComputed variable is set to true.
-		bool solutionComputed;
-		//! Best schedule order.
-		uint16_t *bestScheduleOrder;
+		//! A solution of a project is stored in this structure.
+		struct InstanceSolution	{
+			//! Current activities order.
+			uint16_t *orderOfActivities;
+			//! Best schedule order.
+			uint16_t *bestScheduleOrder;
+			//! Cost of the best schedule.
+			uint16_t costOfBestSchedule;
+		};
+
+		//! The current solution of the read instance.
+		InstanceSolution instanceSolution;
 
 		/* CUDA DATA */
-
+/*
 		//! All required informations are passed through this variable to Cuda global function. For example pointers to device memory, integer parameters etc.
 		CudaData cudaData;
 		//! Cuda capability of selected graphics card. (for example value 130 correspond to capability 1.3)
@@ -262,9 +352,32 @@ class ScheduleSolver {
 		uint16_t *cudaSuccessorsArray;
 		//! Texture array of successors indices.
 		uint16_t *cudaSuccessorsIdxsArray; 
+		*/
 
 		/* MISC DATA */
+		
+		// TODO DOC!
+		// The base data-structure - an element in the list for the "Extended Node Packing Bound" problem.
+		struct ListActivity {
+			ListActivity(uint16_t id, uint16_t par, uint8_t d) : activityId(id), concurrencyCoeff(par), duration(d) { };
+			bool operator<(const ListActivity& x) const {
+				if (concurrencyCoeff < x.concurrencyCoeff)
+					return true;
+				else if (concurrencyCoeff > x.concurrencyCoeff)
+					return false;
+				else if (duration > x.duration)
+					return true;
+				else
+					return false;
+			}
 
+			uint16_t activityId;
+			uint16_t concurrencyCoeff; 
+			uint8_t duration;
+		};
+		
+		//! If solution is successfully computed then solutionComputed variable is set to true.
+		bool solutionComputed;
 		//! Purpose of this variable is to remember total computational time.
 		double totalRunTime;
 		//! Number of evaluated schedules on the GPU.
