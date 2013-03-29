@@ -46,17 +46,6 @@ struct SolutionInfo {
 	uint32_t solutionCost;
 	//! How many times was the solution read without improving of the cost.
 	uint32_t readCounter;
-};
-
-/*!
- * \struct SolutionInfo
- * \brief Info structure of the one solution from the set.
- */
-struct SolutionInfo2 {
-	//! Cost of the solution.
-	uint32_t solutionCost;
-	//! How many times was the solution read without improving of the cost.
-	uint32_t readCounter;
 	//! The number of iterations performed at this solution.
 	uint64_t iterationCounter;
 };
@@ -74,10 +63,16 @@ struct MoveInfo	{
 	uint32_t cost;
 };
 
-// TODO DOC
+/*!
+ * \struct Edge
+ * \brief A directed edge (i,j).
+ */
 struct Edge {
+	//! Node i of directed edge (i,j), i corresponds to an activity ID.
 	int16_t i;
+	//! Node j of directed edge (i,j), j corresponds to an activity ID.
 	int16_t j;
+	//! The length of the edge.
 	int32_t weight;
 };
 
@@ -103,7 +98,7 @@ struct CudaData {
 	uint32_t maximalIterationsSinceBest;
 
 	//! Duration of activities.
-	uint8_t *activitiesDuration;
+	uint8_t *durationOfActivities;
 
 	//! Successors bit matrix. 
 	uint8_t *successorsMatrix;
@@ -122,34 +117,25 @@ struct CudaData {
 	//! Tabu cache for every block.
 	uint8_t *tabuCaches;
 
-	//! Hash map array.
-	uint32_t *hashMap;
-	//! If true then tabu hash map is used.
-	bool useTabuHash;
-
 	//! Number of solutions at the solution set.
-	uint32_t solutionsSetSize;
+	uint32_t totalSolutions;
+	//! Number of added edges per solution.
+	uint32_t numberOfAddedEdges;
 	//! Solutions (= orders) at set.
-	uint16_t *solutionsSet;
-	//! Tabu list for each solution at set.
-	MoveIndices *solutionSetTabuLists;
-	//! Info about each solution at set.
-	SolutionInfo *solutionsSetInfo;
-	//! Lock variable - access to set solutions.
-	uint32_t *lockSetSolution;
-
-	uint16_t *solutionSet2;
-	SolutionInfo2 *solutionsSetInfo2;
+	uint16_t *ordersOfSolutions;
+	//! Extra edges for each solution in the set.
 	Edge *addedEdges;
+	//! Info about each solution at set.
+	SolutionInfo *infoAboutSolutions;
+	//! Tabu list for each solution at set.
+	MoveIndices *tabuListsOfSetOfSolutions;
+	//! Lock variable - access to set solutions.
+	uint32_t *lockSetOfSolutions;
 
-	//! Global best solution (for all blocks).
-	uint16_t *globalBestSolution;
 	//! The cost of the best found solution.
-	uint32_t *globalBestSolutionCost;
-	//! Tabu list of the best solution.
-	MoveIndices *globalBestSolutionTabuList;
-	//! Lock variable - access to global best solution.
-	uint32_t *lockGlobalSolution;
+	uint32_t *bestSolutionCost;
+	//! An index to the best solution.
+	uint32_t *indexToTheBestSolution;
 
 	//! Every block save improving solution to proper order.
 	uint16_t *blocksBestSolution;
@@ -157,7 +143,7 @@ struct CudaData {
 	//! Help arrays for reorder of moves.
 	MoveIndices *mergeHelpArray;
 	//! Arrays for reorder of precedence penalty free moves.
-	MoveIndices *swapFreeMergeArray;
+	MoveIndices *swapMergeArray;
 
 	//! How many times can be solution read without improving than diversification will be called.
 	uint32_t maximalValueOfReadCounter;

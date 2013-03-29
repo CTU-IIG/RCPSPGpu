@@ -1,5 +1,5 @@
 # Default C++ compiler.
-CPP=g++
+CPP=g++-4.6.3
 # Nvidia Cuda compiler.
 NVCC=nvcc -lcudart --compiler-bindir=/usr/x86_64-pc-linux-gnu/gcc-bin/4.6.3
 
@@ -11,12 +11,12 @@ SRC = ConfigureRCPSP.cpp CreateHeaderFile.cpp InputReader.cpp RCPSPGpu.cpp Sourc
 
 # If yout want to analyse performance then switch -pg (gprof) should be used. Static linkage of standard C++ library (-static-libstdc++).
 ifdef DEBUG
-OPTIMISATION = -G
+OPTIMISATION = -g -G
 else
-OPTIMISATION = -O3
+OPTIMISATION = -O3 --maxrregcount=32
 endif
 
-CAPABILITY = --generate-code arch=compute_20,code=sm_21 --maxrregcount=32
+CAPABILITY = --generate-code arch=compute_20,code=sm_21
 GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe,-fopenmp
 
 # Compile all.
@@ -41,7 +41,7 @@ RCPSPGpu: $(OBJ) RCPSPGpu.o
 
 # Compile *.cu files to objects.
 %.o: %.cu
-	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) --ptxas-options=-v -c -o $@ $<
+	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) --ptxas-options=-v -dc -o $@ $<
 
 # Dependencies among header files and object files.
 ${OBJ}: ${INC}

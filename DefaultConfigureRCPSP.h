@@ -14,8 +14,6 @@
 
 //! Tabu list size. 
 #define DEFAULT_TABU_LIST_SIZE 800	// Good choice: 120 activities - 800; 30 activities - 60
-//! If you want to use tabu hash then set this value to 1. 
-#define DEFAULT_USE_TABU_HASH 0
 //! Tabu search iterations per block.
 #define DEFAULT_NUMBER_OF_ITERATIONS 500 
 //! Maximal number of iterations since best solution found. (diversification purposes)

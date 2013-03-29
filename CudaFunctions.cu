@@ -490,44 +490,6 @@ __device__ uint16_t cudaShakingDownEvaluation(const CudaData& cudaData, uint16_t
 }
 
 
-/* HASH TABLE INDEX FUNCTION */
-
-/*!
- * \param numAct Number of activities.
- * \param cudaBlockOrder Current order of the block.
- * \param actX Swap index i - logical swap.
- * \param actY Swap index j - logical swap.
- * \param actI Swap index i - store purpose.
- * \param actJ Swap index j - store purpose.
- * \return Index to a hash table.
- * \brief Function compute hash table index for tabu hash purposes.
- */
-__device__ uint32_t cudaComputeHashTableIndex(uint16_t numAct, uint16_t *cudaBlockOrder, uint16_t actX, uint16_t actY, uint32_t actI, uint32_t actJ)	{
-	uint32_t hashValue = 1;
-
-	hashValue *= (R+2*actI);
-	hashValue ^= actI;
-
-	for (uint32_t i = 1; i < numAct-1; ++i)	{
-		uint32_t activityId = cudaBlockOrder[i];
-		if (i == actX)
-			activityId = cudaBlockOrder[actY];
-		if (i == actY)
-			activityId = cudaBlockOrder[actX];
-
-		hashValue *= (R+2*activityId*i);
-		hashValue ^= activityId;
-	}
-
-	hashValue *= (R+2*actJ);
-	hashValue ^= actJ;
-
-	hashValue /= 2;
-	hashValue &= 0x00ffffff;	// Size of the hash table is 2^24.
-
-	return hashValue;
-}
-
 /*	CUDA IMPLEMENT OF SIMPLE TABU LIST */
 
 /*!
@@ -741,11 +703,11 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	uint16_t threadStartValues[MAXIMUM_CAPACITY_OF_RESOURCE];
 	uint8_t threadRemainingResourcesCapacity[NUMBER_OF_RESOURCES*MAXIMAL_SUM_OF_FLOATS];
 	uint16_t threadStartTimesById[NUMBER_OF_ACTIVITIES];
-
+/*
 	extern __shared__ uint8_t dynamicSharedMemory[];
-	if (threadIdx.x == 0)	{
+	if (threadIdx.x == 0)	{ */
 		/* SET VARIABLES */
-		iter = 0;
+/*		iter = 0;
 		blockTabuIdx = 0;
 		blockReadFromSet = true;
 		blockWriteBestBlock = false;
@@ -766,9 +728,9 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 		curand_init(3*blockIdx.x+71, blockIdx.x, 0, &randState);
 		blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
-		
+*/		
 		/* ASSIGN SHARED MEMORY */
-		blockMergeArray = (MoveInfo*) dynamicSharedMemory; 
+/*		blockMergeArray = (MoveInfo*) dynamicSharedMemory; 
 		if (maximalNeighbourhoodSize < 0xffff)	{
 			blockPartitionCounterUInt16 = (uint16_t*) (blockMergeArray+blockDim.x);
 			blockPartitionCounterUInt32 = NULL;
@@ -1099,7 +1061,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 	if (threadIdx.x == 0)
 		atomicExch(cudaData.lockGlobalSolution, DATA_AVAILABLE);
-
+*/
 	return;
 }
 

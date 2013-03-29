@@ -14,12 +14,6 @@
 #include "ConfigureRCPSP.h"
 
 /*!
- * Constant that is used to turn on/off debug mode for GPU tabu hash.
- * If DEBUG is on then some tabu hash statistics are printed to console.
- */
-#define DEBUG_TABU_HASH 0
-
-/*!
  * Tabu search meta heuristic is used to solve RCPSP. GPU computing power is exploited for quicker solving of the problem.
  * \class ScheduleSolver
  * \brief Instance of this class is able to solve resource constrained project scheduling problem.
@@ -246,9 +240,6 @@ class ScheduleSolver {
 		 */
 		template<class X, class Y>
 		static Y* convertArrayType(X* array, size_t length);
-
-		//! Free all allocated Cuda resources.
-		void freeCudaMemory();
 
 	private:
 

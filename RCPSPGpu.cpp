@@ -102,8 +102,6 @@ int rcpspGpu(int argc, char* argv[])	{
 
 		if (arg == "--write-result-file" || arg == "-wrf")
 			ConfigureRCPSP::WRITE_RESULT_FILE = true;
-		if (arg == "--use-tabu-hash" || arg == "-uth")
-			ConfigureRCPSP::USE_TABU_HASH = true;
 
 		if (arg == "--help" || arg == "-h")	{
 			cout<<"RCPSP schedule solver."<<endl<<endl;
@@ -126,8 +124,6 @@ int rcpspGpu(int argc, char* argv[])	{
 			cout<<"\t\t"<<"Number of solutions in the set of solutions."<<endl;
 			cout<<"\t"<<"--number-of-blocks-per-multiprocessor ARG, -nobpm ARG, ARG=POSITIVE_INTEGER"<<endl;
 			cout<<"\t\t"<<"Number of cuda blocks per multiprocessor."<<endl;
-			cout<<"\t"<<"--use-tabu-hash, -uth"<<endl;
-			cout<<"\t\t"<<"If you add this switch then the tabu hash will be used. That could improve quality of solution."<<endl;
 			cout<<"\t"<<"--maximal-value-of-read-counter ARG, -mvorc ARG, ARG=POSITIVE_INTEGER"<<endl;
 			cout<<"\t\t"<<"How many times will be new (updated) set solution read without diversification."<<endl;
 			cout<<"\t\t"<<"If set solution is changed - improved, then counter is reset."<<endl;
