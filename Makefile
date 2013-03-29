@@ -1,7 +1,7 @@
 # Default C++ compiler.
 CPP=g++
 # Nvidia Cuda compiler.
-NVCC=nvcc -lcudart
+NVCC=nvcc -lcudart --compiler-bindir=/usr/x86_64-pc-linux-gnu/gcc-bin/4.6.3
 
 INST_PATH = /usr/local/bin/
 
@@ -17,7 +17,7 @@ OPTIMISATION = -O3
 endif
 
 CAPABILITY = --generate-code arch=compute_20,code=sm_21 --maxrregcount=32
-GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe
+GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe,-fopenmp
 
 # Compile all.
 build: CreateHeaderFile RCPSPGpu

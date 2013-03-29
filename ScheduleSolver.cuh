@@ -330,7 +330,7 @@ class ScheduleSolver {
 		InstanceSolution instanceSolution;
 
 		/* CUDA DATA */
-/*
+
 		//! All required informations are passed through this variable to Cuda global function. For example pointers to device memory, integer parameters etc.
 		CudaData cudaData;
 		//! Cuda capability of selected graphics card. (for example value 130 correspond to capability 1.3)
@@ -352,7 +352,7 @@ class ScheduleSolver {
 		uint16_t *cudaSuccessorsArray;
 		//! Texture array of successors indices.
 		uint16_t *cudaSuccessorsIdxsArray; 
-		*/
+		
 
 		/* MISC DATA */
 		
@@ -376,8 +376,6 @@ class ScheduleSolver {
 			uint8_t duration;
 		};
 		
-		//! If solution is successfully computed then solutionComputed variable is set to true.
-		bool solutionComputed;
 		//! Purpose of this variable is to remember total computational time.
 		double totalRunTime;
 		//! Number of evaluated schedules on the GPU.
