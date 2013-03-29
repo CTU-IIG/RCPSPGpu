@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -57,7 +58,6 @@ ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : tot
 		if (verbose == true)
 			cout<<"All required resources allocated..."<<endl<<endl;
 		instanceSolution.bestScheduleOrder = NULL;
-//		createStaticTreeOfSolutions(instance);
 	}
 }
 
@@ -511,6 +511,8 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 		cudaError = errorHandler(13);
 	}
 
+	loadInitialSolutionsToGpu(5);
+
 	/* CREATE TABU LISTS FOR SET OF SOLUTIONS */
 	if (!cudaError && cudaMalloc((void**) &cudaData.solutionSetTabuLists, cudaData.solutionsSetSize*cudaData.maxTabuListSize*sizeof(MoveIndices)) != cudaSuccess)	{
 		cudaError = errorHandler(13);
@@ -616,6 +618,302 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	delete[] predIdxs;
 
 	return cudaError;
+}
+
+bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
+	vector<pair<uint16_t, uint16_t> > candidates;
+	for (uint16_t i = 0; i < instance.numberOfActivities; ++i)	{
+		for (uint16_t j = 0; j < instance.numberOfActivities; ++j)	{
+			if (instance.disjunctiveActivities[i][j] == true)	{
+				if (binary_search(instance.allSuccessorsCache[i]->begin(), instance.allSuccessorsCache[i]->end(), j) == true)
+					continue;
+				if (binary_search(instance.allPredecessorsCache[i]->begin(), instance.allPredecessorsCache[i]->end(), j) == true)
+					continue;
+				candidates.push_back(pair<uint16_t, uint16_t>(i,j));
+			}
+		}
+	}
+
+	cout<<"Number Of disjunctive pairs: "<<candidates.size()<<endl;
+
+	uint32_t maximalNumberOfNodes = 1;
+	for (uint16_t d = 0; d < numberOfEdges; ++d)
+		maximalNumberOfNodes *= 2;
+
+	vector<pair<uint8_t,void*> > allocatedMemory;
+	map<uint32_t, uint32_t> counters;
+	list<pair<uint16_t, InstanceData> > staticTree;
+	staticTree.push_back(pair<uint16_t, InstanceData>(0, instance));
+
+	while (staticTree.size() < maximalNumberOfNodes && !staticTree.empty())	{
+		uint16_t deep = staticTree.front().first;
+		InstanceData parent = staticTree.front().second;
+		staticTree.pop_front();
+		uint16_t parentLowerBound = lowerBoundOfMakespan(parent);
+		// Start TIMER ...
+		timeval startTime, endTime, diffTime;
+		gettimeofday(&startTime, NULL);
+
+		bool threadsStop = false;
+		InstanceData bestChild1, bestChild2;
+		uint32_t bestBranchCost = UINT32_MAX;
+		random_shuffle(candidates.begin(), candidates.end());
+		cout<<"START ITERATION"<<endl;
+		#pragma omp parallel for 
+		for (uint32_t o = 0; o < candidates.size(); ++o)	{
+			if (!threadsStop)	{
+				// Selected pair of activities.
+				InstanceData child1 = parent, child2 = parent;
+				uint16_t i = candidates[o].first, j = candidates[o].second;
+
+				bool alreadyAdded = false;
+				for (vector<InstanceData::Edge>::const_iterator it = parent.addedEdges.begin(); it != parent.addedEdges.end(); ++it)	{
+					if ((it->i == i && it->j == j) || (it->i == j && it->j == i)
+							|| (binary_search(parent.allSuccessorsCache[i]->begin(), parent.allSuccessorsCache[i]->end(), j) == true)
+							|| (binary_search(parent.allPredecessorsCache[i]->begin(), parent.allPredecessorsCache[i]->end(), j) == true))	{
+						alreadyAdded = true;
+						break;	
+					}
+				}
+
+				if (alreadyAdded)
+					continue;
+
+				// Check already added edges!
+
+				for (uint8_t s = 0; s < 2; ++s)	{
+					// Select edge (i,j) or (j,i).
+					InstanceData& child = (s == 0 ? child1 : child2);
+					// Alloc and copy required memory, e.g. successors and predecessors 2D arrays, the number of them...
+					uint16_t *numberOfSuccessors = new uint16_t[parent.numberOfActivities], *numberOfPredecessors = new uint16_t[parent.numberOfActivities];
+					uint16_t **copySuccessors = new uint16_t*[parent.numberOfActivities], **copyPredecessors = new uint16_t*[parent.numberOfActivities];
+					copy(parent.successorsOfActivity, parent.successorsOfActivity+parent.numberOfActivities, copySuccessors);
+					copy(parent.predecessorsOfActivity, parent.predecessorsOfActivity+parent.numberOfActivities, copyPredecessors);
+					copy(parent.numberOfSuccessors, parent.numberOfSuccessors+parent.numberOfActivities, numberOfSuccessors);
+					copy(parent.numberOfPredecessors, parent.numberOfPredecessors+parent.numberOfActivities, numberOfPredecessors);
+					child.numberOfSuccessors = numberOfSuccessors; child.numberOfPredecessors = numberOfPredecessors;
+					child.successorsOfActivity = copySuccessors; child.predecessorsOfActivity = copyPredecessors;
+					// Add edge (i,j) or (j,i).
+					copySuccessors[i] = copyAndPush(parent.successorsOfActivity[i], numberOfSuccessors[i], j);
+					copyPredecessors[j] = copyAndPush(parent.predecessorsOfActivity[j], numberOfPredecessors[j], i);
+					++numberOfSuccessors[i]; ++numberOfPredecessors[j];
+					// Update the caches of successors and predecessors;
+					vector<uint16_t>* iPart = new vector<uint16_t>(*parent.allPredecessorsCache[i]);
+					vector<uint16_t>* jPart = new vector<uint16_t>(*parent.allSuccessorsCache[j]);
+					vector<uint16_t>::iterator sit1 = upper_bound(iPart->begin(), iPart->end(), i);
+					vector<uint16_t>::iterator sit2 = upper_bound(jPart->begin(), jPart->end(), j);
+					iPart->insert(sit1, i); jPart->insert(sit2, j);
+					for (vector<uint16_t>::const_iterator it2 = iPart->begin(); it2 != iPart->end(); ++it2)	{
+						vector<uint16_t> *result = new vector<uint16_t>();
+						back_insert_iterator<vector<uint16_t> > bit(*result);
+						set_union(parent.allSuccessorsCache[*it2]->begin(), parent.allSuccessorsCache[*it2]->end(), jPart->begin(), jPart->end(), bit);
+						child.allSuccessorsCache[*it2] = result;
+						#pragma omp critical
+						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
+					}
+					for (vector<uint16_t>::const_iterator it2 = jPart->begin(); it2 != jPart->end(); ++it2)	{
+						vector<uint16_t> *result = new vector<uint16_t>();
+						back_insert_iterator<vector<uint16_t> > bit(*result);
+						set_union(parent.allPredecessorsCache[*it2]->begin(), parent.allPredecessorsCache[*it2]->end(), iPart->begin(), iPart->end(), bit);
+						child.allPredecessorsCache[*it2] = result;
+						#pragma omp critical
+						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
+					}
+					delete iPart; delete jPart;
+					// Update the matrix of disjunctive activities.
+					bool *allocatedRows = new bool[parent.numberOfActivities];
+					fill(allocatedRows, allocatedRows+parent.numberOfActivities, false);
+					child.disjunctiveActivities = new bool*[parent.numberOfActivities];
+					copy(parent.disjunctiveActivities, parent.disjunctiveActivities+parent.numberOfActivities, child.disjunctiveActivities);
+					#pragma omp critical
+					allocatedMemory.push_back(pair<uint8_t,void*>(3, child.disjunctiveActivities));
+					for (uint16_t a = 0; a < parent.numberOfActivities; ++a)	{
+						for (uint8_t l = 0; l < 2; ++l)	{
+							uint16_t c = (l == 0 ? i : j);
+							if (a != c && parent.disjunctiveActivities[c][a] == false)	{
+								if ((binary_search(child.allSuccessorsCache[c]->begin(), child.allSuccessorsCache[c]->end(), a) == true)
+										|| (binary_search(child.allPredecessorsCache[c]->begin(), child.allPredecessorsCache[c]->end(), a) == true))	{
+									if (!allocatedRows[a])	{
+										child.disjunctiveActivities[a] = new bool[parent.numberOfActivities];
+										copy(parent.disjunctiveActivities[a], parent.disjunctiveActivities[a]+parent.numberOfActivities, child.disjunctiveActivities[a]);
+										allocatedRows[a] = true;
+										#pragma omp critical
+										allocatedMemory.push_back(pair<uint8_t,void*>(4, child.disjunctiveActivities[a]));
+									}
+									if (!allocatedRows[c])	{
+										child.disjunctiveActivities[c] = new bool[parent.numberOfActivities];
+										copy(parent.disjunctiveActivities[c], parent.disjunctiveActivities[c]+parent.numberOfActivities, child.disjunctiveActivities[c]);
+										allocatedRows[c] = true;
+										#pragma omp critical
+										allocatedMemory.push_back(pair<uint8_t,void*>(4, child.disjunctiveActivities[c]));
+									}
+									child.disjunctiveActivities[a][c] = child.disjunctiveActivities[c][a] = true;
+								}
+							}
+						}
+					}
+					delete[] allocatedRows;
+					// Store all pointers to the allocated memory to be able to free it later.
+					#pragma omp critical
+					{
+						allocatedMemory.push_back(pair<uint8_t,void*>(0, child.successorsOfActivity[i]));
+						allocatedMemory.push_back(pair<uint8_t,void*>(0, child.predecessorsOfActivity[j]));
+						allocatedMemory.push_back(pair<uint8_t,void*>(1, copySuccessors));
+						allocatedMemory.push_back(pair<uint8_t,void*>(1, copyPredecessors));
+						allocatedMemory.push_back(pair<uint8_t,void*>(0, numberOfSuccessors));
+						allocatedMemory.push_back(pair<uint8_t,void*>(0, numberOfPredecessors));
+					}
+					// Swap direction of the edge.
+					swap(i,j);
+				}
+				uint16_t lb1 = lowerBoundOfMakespan(child1);
+				uint16_t lb2 = lowerBoundOfMakespan(child2);
+				if (lb1 + lb2 <= 2*parentLowerBound)	{
+					#pragma omp critical
+					threadsStop = true;
+				}
+				#pragma omp critical
+				{
+				if (lb1 + lb2 < bestBranchCost)	{
+					bestBranchCost = lb1+lb2;
+					bestChild1 = child1; bestChild2 = child2;
+					InstanceData::Edge edge = { i,j, -1 };
+					bestChild1.addedEdges.push_back(edge);
+					swap(edge.i, edge.j);
+					bestChild2.addedEdges.push_back(edge);
+					cout<<i<<" "<<j<<endl;
+				}
+				++counters[lb1+lb2];
+				}
+			}
+		}
+
+		// STOP TIMER...
+		gettimeofday(&endTime, NULL);
+		timersub(&endTime, &startTime, &diffTime);
+		double totalRunTime = diffTime.tv_sec+diffTime.tv_usec/1000000.;
+		cout<<"Runtime: "<<totalRunTime<<endl;
+
+		if (bestBranchCost < UINT32_MAX)	{
+			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild1));
+			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild2));
+		}
+		cout<<"STOP ITERATION"<<endl;
+	}
+
+	for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)	{
+		cout<<it->first<<" -> "<<it->second<<endl;
+	}
+
+	cout<<"Total number of modified instances: "<<staticTree.size()<<endl;
+	for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
+		cout<<string(50,'+')<<endl;
+		cout<<"Solution lower bound: "<<lowerBoundOfMakespan(it->second)<<endl;
+		cout<<"Deep: "<<it->first<<endl;
+		cout<<"Edges:";
+		for (vector<InstanceData::Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)
+			cout<<" ("<<it2->i<<","<<it2->j<<")";
+		cout<<endl;
+		cout<<string(50,'-')<<endl;
+	}
+
+	uint32_t bestScheduleLength = UINT32_MAX, indexToBestSchedule = 0;
+	Edge *addedEdges = new Edge[maximalNumberOfNodes*numberOfEdges];
+	SolutionInfo2 *infoOfSolutions = new SolutionInfo2[maximalNumberOfNodes];
+	uint16_t *solutions = new uint16_t[maximalNumberOfNodes*instance.numberOfActivities], *solutionsPtr = solutions;
+	if (staticTree.size() == maximalNumberOfNodes)	{
+		uint32_t infoWriterIdx = 0, edgeWriterIdx = 0;
+		for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
+			InstanceSolution nodeSolution;
+			createInitialSolution(it->second, nodeSolution);
+			uint32_t scheduleLength = shakingDownEvaluation(it->second, nodeSolution, solutionsPtr);
+			convertStartTimesById2ActivitiesOrder(it->second, nodeSolution, solutionsPtr);
+			if (scheduleLength < bestScheduleLength)	{
+				bestScheduleLength = scheduleLength;
+				indexToBestSchedule = infoWriterIdx;
+			}
+			infoOfSolutions[infoWriterIdx].solutionCost = scheduleLength;
+			infoOfSolutions[infoWriterIdx].readCounter = infoOfSolutions[infoWriterIdx].iterationCounter = 0;
+//			cout<<"Precedence penalty: "<<computePrecedencePenalty(it->second, solutionsPtr)<<endl;
+			solutionsPtr = copy(nodeSolution.orderOfActivities, nodeSolution.orderOfActivities+it->second.numberOfActivities, solutionsPtr);
+			delete[] nodeSolution.orderOfActivities; ++infoWriterIdx;
+			for (vector<InstanceData::Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)	{
+				Edge e = { it2->i, it2->j, it->second.durationOfActivities[it2->i] };
+				addedEdges[edgeWriterIdx++];
+			}
+		}
+	} else {
+		// Not sufficient number of solutions was created. It creates all solutions using diversification.
+		for (uint32_t solutionIdx = 0; solutionIdx < maximalNumberOfNodes; ++solutionIdx)	{
+			uint32_t scheduleLength = 0;
+			if ((solutionIdx % 2) == 0)	{
+				scheduleLength = forwardScheduleEvaluation(instance, instanceSolution, solutionsPtr);
+			} else {
+				scheduleLength = shakingDownEvaluation(instance, instanceSolution, solutionsPtr);
+				convertStartTimesById2ActivitiesOrder(instance, instanceSolution, solutionsPtr);
+			}
+			if (scheduleLength < bestScheduleLength)	{
+				bestScheduleLength = scheduleLength;
+				indexToBestSchedule = solutionIdx;
+			}
+			infoOfSolutions[solutionIdx].solutionCost = scheduleLength;
+			infoOfSolutions[solutionIdx].readCounter = infoOfSolutions[solutionIdx].iterationCounter = 0;
+//			cout<<"Precedence penalty: "<<computePrecedencePenalty(instance, solutionsPtr)<<endl;
+			solutionsPtr = copy(instanceSolution.orderOfActivities, instanceSolution.orderOfActivities+instance.numberOfActivities, solutionsPtr);
+			makeDiversification(instance, instanceSolution);
+		}
+	}
+	
+	cout<<"best set cost: "<<bestScheduleLength<<endl;
+	cout<<"index to best: "<<indexToBestSchedule<<endl;
+
+	delete[] solutions;
+	delete[] infoOfSolutions;
+	delete[] addedEdges;
+
+	for (vector<pair<uint8_t,void*> >::iterator it = allocatedMemory.begin(); it != allocatedMemory.end(); ++it)	{
+		switch (it->first)	{
+			case 0:
+				delete[] (uint16_t*) it->second;
+				break;
+			case 1:
+				delete[] (uint16_t**) it->second;
+				break;
+			case 2:
+				delete (vector<uint16_t>*) it->second;
+				break;
+			case 3:
+				delete[] (bool**) it->second;
+				break;
+			case 4:
+				delete[] (bool*) it->second;
+				break;
+		}
+	}
+	/*
+	// Regenerate cache.
+	vector<vector<uint16_t> > sucCache = allSuccessorsCache, predCache = allPredecessorsCache;
+	vector<uint16_t> activityJPredecessors = getAllActivityPredecessors(j);
+	vector<uint16_t> activityISuccessors = getAllActivitySuccessors(i);
+	for (uint16_t i = 0; i < activityJPredecessors.size(); ++i)	{
+	vector<uint16_t> result;
+	back_insert_iterator<vector<uint16_t> > back_insert(result);
+	set_union(allSuccessorsCache[activityJPredecessors[i]].begin(), allSuccessorsCache[activityJPredecessors[i]].end(), activityISuccessors.begin(), activityISuccessors.end(), back_insert);
+	allSuccessorsCache[activityJPredecessors[i]] = result;
+	}
+
+	for (uint16_t j = 0; j < activityISuccessors.size(); ++j)	{
+	vector<uint16_t> result;
+	back_insert_iterator<vector<uint16_t> > back_insert(result);
+	set_union(allPredecessorsCache[activityISuccessors[j]].begin(), allPredecessorsCache[activityISuccessors[j]].end(), activityJPredecessors.begin(), activityJPredecessors.end(), back_insert);
+	allPredecessorsCache[activityISuccessors[j]] = result;
+	}
+
+		uint16_t lowerBound = lowerBoundOfMakespan();
+		counters[lowerBound]++;
+
+*/
+	return false;
 }
 
 bool ScheduleSolver::errorHandler(int16_t phase)	{
@@ -1055,243 +1353,6 @@ uint16_t ScheduleSolver::lowerBoundOfMakespan(const InstanceData& project) {
 	return maximalLowerBound;
 }
 
-void ScheduleSolver::createStaticTreeOfSolutions(const InstanceData& project)	{
-	vector<pair<uint16_t, uint16_t> > candidates;
-	for (uint16_t i = 0; i < project.numberOfActivities; ++i)	{
-		for (uint16_t j = 0; j < project.numberOfActivities; ++j)	{
-			if (project.disjunctiveActivities[i][j] == true)	{
-				if (binary_search(project.allSuccessorsCache[i]->begin(), project.allSuccessorsCache[i]->end(), j) == true)
-					continue;
-				if (binary_search(project.allPredecessorsCache[i]->begin(), project.allPredecessorsCache[i]->end(), j) == true)
-					continue;
-				candidates.push_back(pair<uint16_t, uint16_t>(i,j));
-			}
-		}
-	}
-
-	cout<<"Number Of disjunctive pairs: "<<candidates.size()<<endl;
-
-	uint32_t maxListSize = 32;
-	vector<pair<uint8_t,void*> > allocatedMemory;
-	map<uint32_t, uint32_t> counters;
-	list<pair<uint16_t, InstanceData> > staticTree;
-	staticTree.push_back(pair<uint16_t, InstanceData>(0, project));
-
-	while (staticTree.size() < maxListSize && !staticTree.empty())	{
-		uint16_t deep = staticTree.front().first;
-		InstanceData parent = staticTree.front().second;
-		staticTree.pop_front();
-		uint16_t parentLowerBound = lowerBoundOfMakespan(parent);
-		// Start TIMER ...
-		timeval startTime, endTime, diffTime;
-		gettimeofday(&startTime, NULL);
-
-		bool threadsStop = false;
-		InstanceData bestChild1, bestChild2;
-		uint32_t bestBranchCost = UINT32_MAX;
-		random_shuffle(candidates.begin(), candidates.end());
-		cout<<"START ITERATION"<<endl;
-		#pragma omp parallel for 
-		for (uint32_t o = 0; o < candidates.size(); ++o)	{
-			if (!threadsStop)	{
-				// Selected pair of activities.
-				InstanceData child1 = parent, child2 = parent;
-				uint16_t i = candidates[o].first, j = candidates[o].second;
-
-				bool alreadyAdded = false;
-				for (vector<InstanceData::Edge>::const_iterator it = parent.addedEdges.begin(); it != parent.addedEdges.end(); ++it)	{
-					if ((it->i == i && it->j == j) || (it->i == j && it->j == i)
-							|| (binary_search(parent.allSuccessorsCache[i]->begin(), parent.allSuccessorsCache[i]->end(), j) == true)
-							|| (binary_search(parent.allPredecessorsCache[i]->begin(), parent.allPredecessorsCache[i]->end(), j) == true))	{
-						alreadyAdded = true;
-						break;	
-					}
-				}
-
-				if (alreadyAdded)
-					continue;
-
-				// Check already added edges!
-
-				for (uint8_t s = 0; s < 2; ++s)	{
-					// Select edge (i,j) or (j,i).
-					InstanceData& child = (s == 0 ? child1 : child2);
-					// Alloc and copy required memory, e.g. successors and predecessors 2D arrays, the number of them...
-					uint16_t *numberOfSuccessors = new uint16_t[parent.numberOfActivities], *numberOfPredecessors = new uint16_t[parent.numberOfActivities];
-					uint16_t **copySuccessors = new uint16_t*[parent.numberOfActivities], **copyPredecessors = new uint16_t*[parent.numberOfActivities];
-					copy(parent.successorsOfActivity, parent.successorsOfActivity+parent.numberOfActivities, copySuccessors);
-					copy(parent.predecessorsOfActivity, parent.predecessorsOfActivity+parent.numberOfActivities, copyPredecessors);
-					copy(parent.numberOfSuccessors, parent.numberOfSuccessors+parent.numberOfActivities, numberOfSuccessors);
-					copy(parent.numberOfPredecessors, parent.numberOfPredecessors+parent.numberOfActivities, numberOfPredecessors);
-					child.numberOfSuccessors = numberOfSuccessors; child.numberOfPredecessors = numberOfPredecessors;
-					child.successorsOfActivity = copySuccessors; child.predecessorsOfActivity = copyPredecessors;
-					// Add edge (i,j) or (j,i).
-					copySuccessors[i] = copyAndPush(parent.successorsOfActivity[i], numberOfSuccessors[i], j);
-					copyPredecessors[j] = copyAndPush(parent.predecessorsOfActivity[j], numberOfPredecessors[j], i);
-					++numberOfSuccessors[i]; ++numberOfPredecessors[j];
-					// Update the caches of successors and predecessors;
-					vector<uint16_t>* iPart = new vector<uint16_t>(*parent.allPredecessorsCache[i]);
-					vector<uint16_t>* jPart = new vector<uint16_t>(*parent.allSuccessorsCache[j]);
-					vector<uint16_t>::iterator sit1 = upper_bound(iPart->begin(), iPart->end(), i);
-					vector<uint16_t>::iterator sit2 = upper_bound(jPart->begin(), jPart->end(), j);
-					iPart->insert(sit1, i); jPart->insert(sit2, j);
-					for (vector<uint16_t>::const_iterator it2 = iPart->begin(); it2 != iPart->end(); ++it2)	{
-						vector<uint16_t> *result = new vector<uint16_t>();
-						back_insert_iterator<vector<uint16_t> > bit(*result);
-						set_union(parent.allSuccessorsCache[*it2]->begin(), parent.allSuccessorsCache[*it2]->end(), jPart->begin(), jPart->end(), bit);
-						child.allSuccessorsCache[*it2] = result;
-						#pragma omp critical
-						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
-					}
-					for (vector<uint16_t>::const_iterator it2 = jPart->begin(); it2 != jPart->end(); ++it2)	{
-						vector<uint16_t> *result = new vector<uint16_t>();
-						back_insert_iterator<vector<uint16_t> > bit(*result);
-						set_union(parent.allPredecessorsCache[*it2]->begin(), parent.allPredecessorsCache[*it2]->end(), iPart->begin(), iPart->end(), bit);
-						child.allPredecessorsCache[*it2] = result;
-						#pragma omp critical
-						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
-					}
-					delete iPart; delete jPart;
-					// Update the matrix of disjunctive activities.
-					bool *allocatedRows = new bool[parent.numberOfActivities];
-					fill(allocatedRows, allocatedRows+parent.numberOfActivities, false);
-					child.disjunctiveActivities = new bool*[parent.numberOfActivities];
-					copy(parent.disjunctiveActivities, parent.disjunctiveActivities+parent.numberOfActivities, child.disjunctiveActivities);
-					#pragma omp critical
-					allocatedMemory.push_back(pair<uint8_t,void*>(3, child.disjunctiveActivities));
-					for (uint16_t a = 0; a < parent.numberOfActivities; ++a)	{
-						for (uint8_t l = 0; l < 2; ++l)	{
-							uint16_t c = (l == 0 ? i : j);
-							if (a != c && parent.disjunctiveActivities[c][a] == false)	{
-								if ((binary_search(child.allSuccessorsCache[c]->begin(), child.allSuccessorsCache[c]->end(), a) == true)
-										|| (binary_search(child.allPredecessorsCache[c]->begin(), child.allPredecessorsCache[c]->end(), a) == true))	{
-									if (!allocatedRows[a])	{
-										child.disjunctiveActivities[a] = new bool[parent.numberOfActivities];
-										copy(parent.disjunctiveActivities[a], parent.disjunctiveActivities[a]+parent.numberOfActivities, child.disjunctiveActivities[a]);
-										allocatedRows[a] = true;
-										#pragma omp critical
-										allocatedMemory.push_back(pair<uint8_t,void*>(4, child.disjunctiveActivities[a]));
-									}
-									if (!allocatedRows[c])	{
-										child.disjunctiveActivities[c] = new bool[parent.numberOfActivities];
-										copy(parent.disjunctiveActivities[c], parent.disjunctiveActivities[c]+parent.numberOfActivities, child.disjunctiveActivities[c]);
-										allocatedRows[c] = true;
-										#pragma omp critical
-										allocatedMemory.push_back(pair<uint8_t,void*>(4, child.disjunctiveActivities[c]));
-									}
-									child.disjunctiveActivities[a][c] = child.disjunctiveActivities[c][a] = true;
-								}
-							}
-						}
-					}
-					delete[] allocatedRows;
-					// Store all pointers to the allocated memory to be able to free it later.
-					#pragma omp critical
-					{
-						allocatedMemory.push_back(pair<uint8_t,void*>(0, child.successorsOfActivity[i]));
-						allocatedMemory.push_back(pair<uint8_t,void*>(0, child.predecessorsOfActivity[j]));
-						allocatedMemory.push_back(pair<uint8_t,void*>(1, copySuccessors));
-						allocatedMemory.push_back(pair<uint8_t,void*>(1, copyPredecessors));
-						allocatedMemory.push_back(pair<uint8_t,void*>(0, numberOfSuccessors));
-						allocatedMemory.push_back(pair<uint8_t,void*>(0, numberOfPredecessors));
-					}
-					// Swap direction of the edge.
-					swap(i,j);
-				}
-				uint16_t lb1 = lowerBoundOfMakespan(child1);
-				uint16_t lb2 = lowerBoundOfMakespan(child2);
-				if (lb1 + lb2 <= 2*parentLowerBound)	{
-					#pragma omp critical
-					threadsStop = true;
-				}
-				#pragma omp critical
-				{
-				if (lb1 + lb2 < bestBranchCost)	{
-					bestBranchCost = lb1+lb2;
-					bestChild1 = child1; bestChild2 = child2;
-					InstanceData::Edge edge = { i,j, -1 };
-					bestChild1.addedEdges.push_back(edge);
-					swap(edge.i, edge.j);
-					bestChild2.addedEdges.push_back(edge);
-					cout<<i<<" "<<j<<endl;
-				}
-				++counters[lb1+lb2];
-				}
-			}
-		}
-
-		// STOP TIMER...
-		gettimeofday(&endTime, NULL);
-		timersub(&endTime, &startTime, &diffTime);
-		double totalRunTime = diffTime.tv_sec+diffTime.tv_usec/1000000.;
-		cout<<"Runtime: "<<totalRunTime<<endl;
-
-		if (bestBranchCost < UINT32_MAX)	{
-			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild1));
-			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild2));
-		}
-		cout<<"STOP ITERATION"<<endl;
-	}
-
-	for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)	{
-		cout<<it->first<<" -> "<<it->second<<endl;
-	}
-
-	cout<<"Total number of modified instances: "<<staticTree.size()<<endl;
-	for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
-		cout<<string(50,'+')<<endl;
-		cout<<"Solution lower bound: "<<lowerBoundOfMakespan(it->second)<<endl;
-		cout<<"Deep: "<<it->first<<endl;
-		cout<<"Edges:";
-		for (vector<InstanceData::Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)
-			cout<<" ("<<it2->i<<","<<it2->j<<")";
-		cout<<endl;
-		cout<<string(50,'-')<<endl;
-	}
-
-	for (vector<pair<uint8_t,void*> >::iterator it = allocatedMemory.begin(); it != allocatedMemory.end(); ++it)	{
-		switch (it->first)	{
-			case 0:
-				delete[] (uint16_t*) it->second;
-				break;
-			case 1:
-				delete[] (uint16_t**) it->second;
-				break;
-			case 2:
-				delete (vector<uint16_t>*) it->second;
-				break;
-			case 3:
-				delete[] (bool**) it->second;
-				break;
-			case 4:
-				delete[] (bool*) it->second;
-				break;
-		}
-	}
-	/*
-	// Regenerate cache.
-	vector<vector<uint16_t> > sucCache = allSuccessorsCache, predCache = allPredecessorsCache;
-	vector<uint16_t> activityJPredecessors = getAllActivityPredecessors(j);
-	vector<uint16_t> activityISuccessors = getAllActivitySuccessors(i);
-	for (uint16_t i = 0; i < activityJPredecessors.size(); ++i)	{
-	vector<uint16_t> result;
-	back_insert_iterator<vector<uint16_t> > back_insert(result);
-	set_union(allSuccessorsCache[activityJPredecessors[i]].begin(), allSuccessorsCache[activityJPredecessors[i]].end(), activityISuccessors.begin(), activityISuccessors.end(), back_insert);
-	allSuccessorsCache[activityJPredecessors[i]] = result;
-	}
-
-	for (uint16_t j = 0; j < activityISuccessors.size(); ++j)	{
-	vector<uint16_t> result;
-	back_insert_iterator<vector<uint16_t> > back_insert(result);
-	set_union(allPredecessorsCache[activityISuccessors[j]].begin(), allPredecessorsCache[activityISuccessors[j]].end(), activityJPredecessors.begin(), activityJPredecessors.end(), back_insert);
-	allPredecessorsCache[activityISuccessors[j]] = result;
-	}
-
-		uint16_t lowerBound = lowerBoundOfMakespan();
-		counters[lowerBound]++;
-
-*/
-}
 
 uint16_t ScheduleSolver::evaluateOrder(const InstanceData& project, const InstanceSolution& solution, uint16_t *& timeValuesById, bool forwardEvaluation)	{
 	uint16_t scheduleLength = 0;

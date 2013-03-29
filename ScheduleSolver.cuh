@@ -94,7 +94,12 @@ class ScheduleSolver {
 		 * \brief Copy required data to GPU and compute a critical path makespan.
 		 */
 		bool prepareCudaMemory(const InstanceData& project, InstanceSolution& solution, bool verbose);
-//		bool prepareCudaMemory(uint16_t *activitiesOrder, bool verbose);
+		/*!
+		 * \param numberOfEdges The number of added edges to each created solution.
+		 * \return Return true if a cuda error occurs.
+		 * \brief It creates static tree from which the initial solutions are generated. These solutions are loaded to GPU memory.
+		 */
+		bool loadInitialSolutionsToGpu(const uint16_t& numberOfEdges);
 		/*!
 		 * \param phase Number that correspond to a location at prepareCudaMemory method.
 		 * \return Always return true.
@@ -118,9 +123,6 @@ class ScheduleSolver {
 		 * \brief A lower bound is computed by using the "Extended Node Packing Bound" problem.
 		 */
 		static uint16_t lowerBoundOfMakespan(const InstanceData& project);
-
-		/* TODO documentation */
-		static void createStaticTreeOfSolutions(const InstanceData& project);
 		
 		/*!
 		 * \param project The data of the instance. (activity duration, precedence edges, ...)

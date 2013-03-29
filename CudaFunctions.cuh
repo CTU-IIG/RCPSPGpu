@@ -49,6 +49,19 @@ struct SolutionInfo {
 };
 
 /*!
+ * \struct SolutionInfo
+ * \brief Info structure of the one solution from the set.
+ */
+struct SolutionInfo2 {
+	//! Cost of the solution.
+	uint32_t solutionCost;
+	//! How many times was the solution read without improving of the cost.
+	uint32_t readCounter;
+	//! The number of iterations performed at this solution.
+	uint64_t iterationCounter;
+};
+
+/*!
  * \struct MoveInfo
  * \brief Structure that is used for every block thread to remember best found solution.
  */
@@ -59,6 +72,13 @@ struct MoveInfo	{
 	int16_t j;
 	//! Best found cost.
 	uint32_t cost;
+};
+
+// TODO DOC
+struct Edge {
+	int16_t i;
+	int16_t j;
+	int32_t weight;
 };
 
 /*!
@@ -117,6 +137,10 @@ struct CudaData {
 	SolutionInfo *solutionsSetInfo;
 	//! Lock variable - access to set solutions.
 	uint32_t *lockSetSolution;
+
+	uint16_t *solutionSet2;
+	SolutionInfo2 *solutionsSetInfo2;
+	Edge *addedEdges;
 
 	//! Global best solution (for all blocks).
 	uint16_t *globalBestSolution;
