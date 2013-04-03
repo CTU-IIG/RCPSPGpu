@@ -89,11 +89,11 @@ class ScheduleSolver {
 		 */
 		bool prepareCudaMemory(const InstanceData& project, InstanceSolution& solution, bool verbose);
 		/*!
-		 * \param numberOfEdges The number of added edges to each created solution.
+		 * \param numberOfSetSolutions The number of solutions in the GPU solution set.
 		 * \return Return true if a cuda error occurs.
 		 * \brief It creates static tree from which the initial solutions are generated. These solutions are loaded to GPU memory.
 		 */
-		bool loadInitialSolutionsToGpu(const uint16_t& numberOfEdges);
+		bool loadInitialSolutionsToGpu(const uint16_t& numberOfSetSolutions);
 		/*!
 		 * \param phase Number that correspond to a location at prepareCudaMemory method.
 		 * \return Always return true.
@@ -290,15 +290,6 @@ class ScheduleSolver {
 			std::vector<std::vector<uint16_t>*> allPredecessorsCache;
 			//! The matrix of disjunctive activities.
 			bool **disjunctiveActivities;
-			//! An artificially added directed edge to the problem.
-			struct Edge {
-				//! The start node.
-				uint16_t i;
-				//! The end node.
-				uint16_t j;
-				//! A weight of the edge.
-				int32_t weight;
-			};
 			//! A list of added edges to the problem.
 			std::vector<Edge> addedEdges;
 		};

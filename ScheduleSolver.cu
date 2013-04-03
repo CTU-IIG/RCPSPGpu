@@ -188,12 +188,12 @@ void ScheduleSolver::createInitialSolution(const InstanceData& project, Instance
 					newCurrentLevel[project.successorsOfActivity[activityId][nextLevelIdx]] = 1;
 					anyActivity = true;
 				}
-				for (vector<InstanceData::Edge>::const_iterator it = project.addedEdges.begin(); it != project.addedEdges.end(); ++it)	{
+		/*		for (vector<Edge>::const_iterator it = project.addedEdges.begin(); it != project.addedEdges.end(); ++it)	{
 					if (it->i == activityId)	{
 						newCurrentLevel[it->j] = 1;
 						anyActivity = true;
 					}
-				}
+				} */
 				levels[activityId] = deep;
 			}
 		}
@@ -462,8 +462,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	/* COPY INITIAL SET SOLUTIONS */
 	if (!cudaError)
-		cudaError = loadInitialSolutionsToGpu(3);	// ADD AND REMOVE PROG PARAMETER
-
+		cudaError = loadInitialSolutionsToGpu(ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS);
 
 	/* BEST CURRENT SOLUTIONS OF THE BLOCKS */
 	if (!cudaError && cudaMalloc((void**) &cudaData.blocksBestSolution, project.numberOfActivities*numberOfBlock*sizeof(uint16_t)) != cudaSuccess)	{
@@ -524,7 +523,8 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	return cudaError;
 }
 
-bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
+bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSolutions)	{
+
 	bool cudaError = false;
 	vector<pair<uint16_t, uint16_t> > candidates;
 	for (uint16_t i = 0; i < instance.numberOfActivities; ++i)	{
@@ -539,15 +539,12 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 		}
 	}
 
-	cout<<"Number Of disjunctive pairs: "<<candidates.size()<<endl;
+//	cout<<"Number Of disjunctive pairs: "<<candidates.size()<<endl;
 
 	srand(time(NULL));
-	uint32_t numberOfSetSolutions = 1;
-	for (uint16_t d = 0; d < numberOfEdges; ++d)
-		numberOfSetSolutions *= 2;
-
-	vector<pair<uint8_t,void*> > allocatedMemory;
+	uint32_t numberOfEdges = 0;
 	map<uint32_t, uint32_t> counters;
+	vector<pair<uint8_t,void*> > allocatedMemory;
 	list<pair<uint16_t, InstanceData> > staticTree;
 	staticTree.push_back(pair<uint16_t, InstanceData>(0, instance));
 
@@ -573,7 +570,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 				uint16_t i = candidates[o].first, j = candidates[o].second;
 
 				bool alreadyAdded = false;
-				for (vector<InstanceData::Edge>::const_iterator it = parent.addedEdges.begin(); it != parent.addedEdges.end(); ++it)	{
+				for (vector<Edge>::const_iterator it = parent.addedEdges.begin(); it != parent.addedEdges.end(); ++it)	{
 					if ((it->i == i && it->j == j) || (it->i == j && it->j == i)
 							|| (binary_search(parent.allSuccessorsCache[i]->begin(), parent.allSuccessorsCache[i]->end(), j) == true)
 							|| (binary_search(parent.allPredecessorsCache[i]->begin(), parent.allPredecessorsCache[i]->end(), j) == true))	{
@@ -584,8 +581,6 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 
 				if (alreadyAdded)
 					continue;
-
-				// Check already added edges!
 
 				for (uint8_t s = 0; s < 2; ++s)	{
 					// Select edge (i,j) or (j,i).
@@ -609,21 +604,18 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 					vector<uint16_t>::iterator sit1 = upper_bound(iPart->begin(), iPart->end(), i);
 					vector<uint16_t>::iterator sit2 = upper_bound(jPart->begin(), jPart->end(), j);
 					iPart->insert(sit1, i); jPart->insert(sit2, j);
-					for (vector<uint16_t>::const_iterator it2 = iPart->begin(); it2 != iPart->end(); ++it2)	{
-						vector<uint16_t> *result = new vector<uint16_t>();
-						back_insert_iterator<vector<uint16_t> > bit(*result);
-						set_union(parent.allSuccessorsCache[*it2]->begin(), parent.allSuccessorsCache[*it2]->end(), jPart->begin(), jPart->end(), bit);
-						child.allSuccessorsCache[*it2] = result;
-						#pragma omp critical
-						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
-					}
-					for (vector<uint16_t>::const_iterator it2 = jPart->begin(); it2 != jPart->end(); ++it2)	{
-						vector<uint16_t> *result = new vector<uint16_t>();
-						back_insert_iterator<vector<uint16_t> > bit(*result);
-						set_union(parent.allPredecessorsCache[*it2]->begin(), parent.allPredecessorsCache[*it2]->end(), iPart->begin(), iPart->end(), bit);
-						child.allPredecessorsCache[*it2] = result;
-						#pragma omp critical
-						allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
+					for (uint8_t f = 0; f < 2; ++f)	{
+						vector<vector<uint16_t>*>& cache = (f == 0 ? parent.allSuccessorsCache : parent.allPredecessorsCache);
+						vector<vector<uint16_t>*>& childCache = (f == 0 ? child.allSuccessorsCache : child.allPredecessorsCache);
+						for (vector<uint16_t>::const_iterator it2 = iPart->begin(); it2 != iPart->end(); ++it2)	{
+							vector<uint16_t> *result = new vector<uint16_t>();
+							back_insert_iterator<vector<uint16_t> > bit(*result);
+							set_union(cache[*it2]->begin(), cache[*it2]->end(), jPart->begin(), jPart->end(), bit);
+							childCache[*it2] = result;
+							#pragma omp critical
+							allocatedMemory.push_back(pair<uint8_t,void*>(2, result));
+						}
+						swap(iPart, jPart);
 					}
 					delete iPart; delete jPart;
 					// Update the matrix of disjunctive activities.
@@ -683,11 +675,10 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 				if (lb1 + lb2 < bestBranchCost)	{
 					bestBranchCost = lb1+lb2;
 					bestChild1 = child1; bestChild2 = child2;
-					InstanceData::Edge edge = { i,j, -1 };
-					bestChild1.addedEdges.push_back(edge);
-					swap(edge.i, edge.j);
-					bestChild2.addedEdges.push_back(edge);
-					cout<<i<<" "<<j<<endl;
+					Edge edge1 = { i,j, instance.durationOfActivities[i] };
+					Edge edge2 = { j,i, instance.durationOfActivities[j] };
+					bestChild1.addedEdges.push_back(edge1);
+					bestChild2.addedEdges.push_back(edge2);
 				}
 				++counters[lb1+lb2];
 				}
@@ -701,27 +692,28 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 		cout<<"Runtime: "<<totalRunTime<<endl;
 */
 		if (bestBranchCost < UINT32_MAX)	{
+			numberOfEdges = max((size_t) numberOfEdges, max(bestChild1.addedEdges.size(), bestChild2.addedEdges.size()));
 			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild1));
 			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild2));
 		}
 //		cout<<"STOP ITERATION"<<endl;
 	}
-
+/*
 	for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)	{
 		cout<<it->first<<" -> "<<it->second<<endl;
 	}
-
+*/
 	cout<<"Total number of modified instances: "<<staticTree.size()<<endl;
-	for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
+/*	for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
 		cout<<string(50,'+')<<endl;
 		cout<<"Solution lower bound: "<<lowerBoundOfMakespan(it->second)<<endl;
 		cout<<"Deep: "<<it->first<<endl;
 		cout<<"Edges:";
-		for (vector<InstanceData::Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)
+		for (vector<Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)
 			cout<<" ("<<it2->i<<","<<it2->j<<")";
 		cout<<endl;
 		cout<<string(50,'-')<<endl;
-	}
+	} */
 
 	// Convert tree list-nodes to GPU solutions.
 	bool solutionsExtractedFromStaticTree = false;
@@ -743,14 +735,16 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 			}
 			infoAboutSolutions[infoWriterIdx].solutionCost = scheduleLength;
 			infoAboutSolutions[infoWriterIdx].readCounter = infoAboutSolutions[infoWriterIdx].iterationCounter = 0;
-//			cout<<"Precedence penalty: "<<computePrecedencePenalty(it->second, solutionsPtr)<<endl;
 			solutionsPtr = copy(nodeSolution.orderOfActivities, nodeSolution.orderOfActivities+it->second.numberOfActivities, solutionsPtr);
 			delete[] nodeSolution.orderOfActivities; ++infoWriterIdx;
-			for (vector<InstanceData::Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)	{
-				Edge e = { it2->i, it2->j, it->second.durationOfActivities[it2->i] };
-				addedEdges[edgeWriterIdx++] = e;
+			for (uint32_t i = 0; i < numberOfEdges; ++i)    {
+				if (i < it->second.addedEdges.size())	{
+					addedEdges[edgeWriterIdx++] = it->second.addedEdges[i];
+				} else {
+					 Edge zeroEdge = { 0, 0, 0 };
+					 addedEdges[edgeWriterIdx++] = zeroEdge;
+				}
 			}
-			cout<<it->second.addedEdges.size()<<endl;
 		}
 	} else {
 		// Not sufficient number of solutions was created. It creates all solutions using diversification.
@@ -768,13 +762,20 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 			}
 			infoAboutSolutions[solutionIdx].solutionCost = scheduleLength;
 			infoAboutSolutions[solutionIdx].readCounter = infoAboutSolutions[solutionIdx].iterationCounter = 0;
-//			cout<<"Precedence penalty: "<<computePrecedencePenalty(instance, solutionsPtr)<<endl;
 			solutionsPtr = copy(instanceSolution.orderOfActivities, instanceSolution.orderOfActivities+instance.numberOfActivities, solutionsPtr);
 			makeDiversification(instance, instanceSolution);
 		}
 		memset(addedEdges, 0, numberOfSetSolutions*numberOfEdges*sizeof(Edge));
 	}
-	
+/*
+	for (uint32_t s = 0; s < numberOfSetSolutions; ++s)	{
+		cout<<"order"<<s<<":";
+		for (uint32_t i = 0; i < cudaData.numberOfActivities; ++i)	{
+			cout<<" "<<solutions[s*cudaData.numberOfActivities+i];
+		}
+		cout<<endl;
+	} */
+
 	// Copy solutions to GPU memory.
 	cudaData.totalSolutions = numberOfSetSolutions;
 	cudaData.numberOfAddedEdges = (solutionsExtractedFromStaticTree ? numberOfEdges : 0);
@@ -819,16 +820,15 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 	if (!cudaError && cudaMalloc((void**) &cudaData.bestSolutionCost, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(15);
 	}
-	if (!cudaError && cudaMemset(cudaData.bestSolutionCost, bestScheduleLength, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMemcpy(cudaData.bestSolutionCost, &bestScheduleLength, sizeof(uint32_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
 		cudaError = errorHandler(16);
 	}
 	if (!cudaError && cudaMalloc((void**) &cudaData.indexToTheBestSolution, sizeof(uint32_t)) != cudaSuccess)	{
 		cudaError = errorHandler(16);
 	}
-	if (!cudaError && cudaMemset(cudaData.indexToTheBestSolution, indexToBestSchedule, sizeof(uint32_t)) != cudaSuccess)	{
+	if (!cudaError && cudaMemcpy(cudaData.indexToTheBestSolution, &indexToBestSchedule, sizeof(uint32_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
 		cudaError = errorHandler(17);
 	}
-
 	
 	delete[] solutions;
 	delete[] infoAboutSolutions;
@@ -967,7 +967,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 		instanceSolution.bestScheduleOrder = NULL;
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
 	}
-
+/*
 	SolutionInfo *info = new SolutionInfo[cudaData.totalSolutions];
 	uint16_t *orders = new uint16_t[instance.numberOfActivities*cudaData.totalSolutions];
 	if (!cudaError && cudaMemcpy(orders, cudaData.ordersOfSolutions, cudaData.numberOfActivities*cudaData.totalSolutions*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
@@ -996,7 +996,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 
 	delete[] orders;
 	delete[] info;
-
+*/
 
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);
@@ -1129,7 +1129,7 @@ uint16_t* ScheduleSolver::computeLowerBounds(const uint16_t& startActivityId, co
 						break;
 					} else {
 						// It updates the maximal distance from the start activity to the activity "activityId".
-						minimalStartTime = max(maxDistances[predecessor]+project.durationOfActivities[predecessor], minimalStartTime);
+						minimalStartTime = max((uint16_t) (maxDistances[predecessor]+project.durationOfActivities[predecessor]), minimalStartTime);
 						if (project.numberOfPredecessors[activityId] > 1 && energyReasoning)
 							predecessorsBranches[p] = branches[predecessor];
 					}
@@ -1185,7 +1185,7 @@ uint16_t* ScheduleSolver::computeLowerBounds(const uint16_t& startActivityId, co
 								if ((sumOfEnergy % project.capacityOfResources[k]) != 0)
 									++timeInterval;
 								
-								minimalResourceStartTime = max(minimalResourceStartTime, maxDistances[*sit]+project.durationOfActivities[*sit]+timeInterval); 
+								minimalResourceStartTime = max((uint32_t) minimalResourceStartTime, maxDistances[*sit]+project.durationOfActivities[*sit]+timeInterval); 
 							}
 						}
 						minimalStartTime = max(minimalStartTime, minimalResourceStartTime);
@@ -1270,8 +1270,7 @@ uint16_t ScheduleSolver::lowerBoundOfMakespan(const InstanceData& project) {
 	 		uint16_t *ub = computeLowerBounds(copyOfProject.numberOfActivities-1, copyOfProject, true);
 	 		changeDirectionOfEdges(copyOfProject);
 			uint16_t *lb = computeLowerBounds(0, copyOfProject, true);
-			maximalLowerBound = max(maximalLowerBound, lowerBound+max(lb[copyOfProject.numberOfActivities-1], ub[0]));
-		//	maximalLowerBound = max(maximalLowerBound, lowerBound+lb[copyOfProject.numberOfActivities-1]);
+			maximalLowerBound = max(maximalLowerBound, (uint16_t) (lowerBound+max(lb[copyOfProject.numberOfActivities-1], ub[0])));
 			delete[] lb; delete[] ub;
 
 			// All activities which are able to run concurrently with activity "activityId1" have reduced duration.
@@ -1305,12 +1304,12 @@ uint16_t ScheduleSolver::evaluateOrder(const InstanceData& project, const Instan
 		uint16_t activityId = solution.orderOfActivities[forwardEvaluation == true ? i : project.numberOfActivities-i-1];
 		for (uint16_t j = 0; j < project.numberOfPredecessors[activityId]; ++j)	{
 			uint16_t predecessorActivityId = project.predecessorsOfActivity[activityId][j];
-			start = max(timeValuesById[predecessorActivityId]+project.durationOfActivities[predecessorActivityId], start);
+			start = max((uint16_t) (timeValuesById[predecessorActivityId]+project.durationOfActivities[predecessorActivityId]), start);
 		}
 
 		start = max(sourcesLoad.getEarliestStartTime(project.requiredResourcesOfActivities[activityId], start, project.durationOfActivities[activityId]), start);
 		sourcesLoad.addActivity(start, start+project.durationOfActivities[activityId], project.requiredResourcesOfActivities[activityId]);
-		scheduleLength = max(scheduleLength, start+project.durationOfActivities[activityId]);
+		scheduleLength = max(scheduleLength, (uint16_t) (start+project.durationOfActivities[activityId]));
 
 		timeValuesById[activityId] = start;
 	}

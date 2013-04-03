@@ -400,6 +400,8 @@ __device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *succe
 	return penalty;
 }
 
+/* SOFT VIOLATION PENALTIES */
+#include <cstdio>
 /*!
  * \param numberOfActivities The number of the activities in the project.
  * \param activitiesDuration Duration of each activity.
@@ -414,6 +416,23 @@ __device__ uint32_t cudaComputeTardinessPenalty(uint16_t numberOfActivities, uin
 			overhangPenalty += startTimesById[id]+activitiesDuration[id]+rightLeftLongestPaths[id]-makespan;
 	}
 	return overhangPenalty;
+}
+
+/*!
+ * \param cudaData RCPSP constants, variables and data.
+ * \param addedEdges Extra edges added to each solution in the solution set.
+ * \param startTimesById Array of start time values computed by the evaluation algorithm.
+ * \return The precedence penalty.
+ */
+__device__ uint32_t cudaComputePenaltyOfEdgeViolations(const CudaData& cudaData, Edge *& addedEdges, uint16_t *startTimesById)	{
+	uint32_t precedencePenalty = 0;
+	for (uint32_t e = 0; e < cudaData.numberOfAddedEdges; ++e)	{
+		if (startTimesById[addedEdges[e].i]+addedEdges[e].weight > startTimesById[addedEdges[e].j])
+			precedencePenalty += startTimesById[addedEdges[e].i]+addedEdges[e].weight-startTimesById[addedEdges[e].j];
+	}
+	if (precedencePenalty > 1000)
+		printf("penalty: %d\n", precedencePenalty);
+	return precedencePenalty;
 }
 
 /*!
@@ -651,8 +670,6 @@ inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfAct
 
 /*	CUDA IMPLEMENT OF GLOBAL KERNEL */
 
-#include <cstdio>
-
 /*!
  * Global function for RCPSP problem. Blocks communicate with each other through global memory.
  * Local variables are coalesced. Dynamic shared memory and texture memory is used.
@@ -661,6 +678,7 @@ inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfAct
  */
 __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	
+	__shared__ bool initialized;
 	__shared__ uint32_t iter;
 	__shared__ MoveInfo iterBestMove;
 	__shared__ Edge *blockAddedEdges;
@@ -704,6 +722,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	if (threadIdx.x == 0)	{
 		/* SET VARIABLES */
 		iter = 0;
+		initialized = false;
 		blockTabuIdx = 0;
 		blockWriteBestBlock = false;
 		blockReadSetSolution = false;
@@ -779,11 +798,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		atomicExch(cudaData.lockSetOfSolutions, DATA_AVAILABLE);
 	}
 
-	// The best schedule is the current read schedule. It could not be required if data are manipulated in a correct way (no race conditions, no initialization bugs).
-/*	for (uint32_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)	{
-		blockBestSolution[i] = blockCurrentOrder[i];
-	} */
-
 	while (iter < cudaData.numberOfIterationsPerBlock && !blockCriticalPathLengthAchieved)	{
 
 		for (uint16_t i = threadIdx.x+1; i < (cudaData.numberOfActivities-1); i += blockDim.x)	{
@@ -829,8 +843,13 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			uint32_t totalEval = cudaEvaluateOrder(cudaData, blockCurrentOrder, move->i, move->j, blockActivitiesDuration, blockResourceIndices, threadResourcesLoad,
 					threadStartValues, threadRemainingResourcesCapacity, threadStartTimesById, cudaData.capacityResolutionAlgorithm);
 			totalEval += cudaComputeTardinessPenalty(cudaData.numberOfActivities, blockActivitiesDuration, blockBestCost-1, threadStartTimesById);
+			totalEval += cudaComputePenaltyOfEdgeViolations(cudaData, blockAddedEdges, threadStartTimesById);
 			totalEval = (totalEval > 0x0000ffff ? 0xffff0000 : totalEval<<16);
 			totalEval |= (curand(&threadRandState) & 0x0000ffff);
+			uint32_t precedencePenalty = cudaComputePrecedencePenalty(cudaData.numberOfActivities, blockSuccessorsMatrix, blockActivitiesDuration, threadStartTimesById);
+			if (precedencePenalty > 0)	{
+				printf("ERROR: block %d, thread %d, infeasible solution!\n", blockIdx.x, threadIdx.x);
+			}
 			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
 			if ((isPossibleMove && totalEval < threadBestCost) || (totalEval>>16) < blockBestCost)	{
 				struct MoveInfo newBestThreadSolution = { move->i, move->j, totalEval };
@@ -917,11 +936,13 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			__syncthreads();
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				blockBestSolution[i] = blockCurrentOrder[i];
-			blockWriteBestBlock = false;
+			blockWriteBestBlock = false; initialized = true;
 		}
 		__syncthreads();
 
 		if (blockWriteSetSolution == true)	{
+			if (!initialized)
+				printf("ERROR - write not-initialized solution!!\n");
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				cudaData.ordersOfSolutions[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
@@ -929,7 +950,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			__threadfence();
 			__syncthreads();
 			if (threadIdx.x == 0)	{
-				blockWriteSetSolution = false;
+				blockWriteSetSolution = false; 
 				atomicExch(cudaData.lockSetOfSolutions, DATA_AVAILABLE);
 			}
 		}
@@ -953,7 +974,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 					uint32_t readCounter = ++cudaData.infoAboutSolutions[blockIndexOfSetSolution].readCounter;
 					blockNumberOfIterationsSinceBest = 0;
 
-					blockReadSetSolution = false;
+					blockReadSetSolution = false; initialized = false;
 					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
 					atomicExch(cudaData.lockSetOfSolutions, DATA_AVAILABLE);
 					if (readCounter > cudaData.maximalValueOfReadCounter)
@@ -976,6 +997,10 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	__syncthreads();
 
 	if (*cudaData.bestSolutionCost > blockBestCost)	{
+		if (threadIdx.x == 0 && !initialized)	{
+			printf("ERROR - write not-initialized solution!!\n");
+			printf("original %d; new %d\n", *cudaData.bestSolutionCost, blockBestCost);
+		}
 		for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 			cudaData.ordersOfSolutions[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 		for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
