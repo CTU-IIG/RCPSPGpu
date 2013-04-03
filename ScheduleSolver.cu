@@ -354,6 +354,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
 		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
+		dynSharedMemSize += numberOfBlock*3*sizeof(Edge);	// !!! added edges for each block
 
 		if ((project.numberOfActivities-2)*cudaData.swapRange < USHRT_MAX)
 			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
@@ -461,7 +462,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	/* COPY INITIAL SET SOLUTIONS */
 	if (!cudaError)
-		cudaError = loadInitialSolutionsToGpu(5);	// ADD AND REMOVE PROG PARAMETER
+		cudaError = loadInitialSolutionsToGpu(3);	// ADD AND REMOVE PROG PARAMETER
 
 
 	/* BEST CURRENT SOLUTIONS OF THE BLOCKS */
@@ -749,6 +750,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfEdges)	{
 				Edge e = { it2->i, it2->j, it->second.durationOfActivities[it2->i] };
 				addedEdges[edgeWriterIdx++] = e;
 			}
+			cout<<it->second.addedEdges.size()<<endl;
 		}
 	} else {
 		// Not sufficient number of solutions was created. It creates all solutions using diversification.
@@ -943,28 +945,58 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	/* GET BEST FOUND SOLUTION */
 
 	bool cudaError = false;
-/*	uint32_t bestScheduleCost = 0xffffffff;
+	uint32_t indexToTheBestSolution;
 	instanceSolution.bestScheduleOrder = new uint16_t[instance.numberOfActivities];
-	if (!cudaError && cudaMemcpy(&bestScheduleCost, cudaData.globalBestSolutionCost, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
+	if (!cudaError && cudaMemcpy(&instanceSolution.costOfBestSchedule, cudaData.bestSolutionCost, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
 		cudaError = true;	
 	}
-	if (!cudaError && cudaMemcpy(instanceSolution.bestScheduleOrder, cudaData.globalBestSolution, instance.numberOfActivities*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
+	if (!cudaError && cudaMemcpy(&indexToTheBestSolution, cudaData.indexToTheBestSolution, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
+		cudaError = true;
+	}
+	if (!cudaError && cudaMemcpy(instanceSolution.bestScheduleOrder, cudaData.ordersOfSolutions+indexToTheBestSolution*cudaData.numberOfActivities,
+				instance.numberOfActivities*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
 		cudaError = true;	
 	}
 	if (!cudaError && cudaMemcpy(&numberOfEvaluatedSchedules, cudaData.evaluatedSchedules, sizeof(uint64_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		cudaError = true;	
 	}
-	if (cudaError || bestScheduleCost == 0xffffffff)	{
+
+	if (cudaError == true)	{
+		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		delete[] instanceSolution.bestScheduleOrder;
 		instanceSolution.bestScheduleOrder = NULL;
+		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
 	}
 
-	if (cudaError)	{
-		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
-	}  */
+	SolutionInfo *info = new SolutionInfo[cudaData.totalSolutions];
+	uint16_t *orders = new uint16_t[instance.numberOfActivities*cudaData.totalSolutions];
+	if (!cudaError && cudaMemcpy(orders, cudaData.ordersOfSolutions, cudaData.numberOfActivities*cudaData.totalSolutions*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
+		cudaError = true;
+	}
+	if (!cudaError && cudaMemcpy(info, cudaData.infoAboutSolutions, cudaData.totalSolutions*sizeof(SolutionInfo), cudaMemcpyDeviceToHost) != cudaSuccess)	{
+		cudaError = true;
+	}
+
+	if (!cudaError)	{
+		uint64_t iterations = 0;
+		for (uint32_t s = 0; s < cudaData.totalSolutions; ++s)	{
+			cout<<string(30,'+')<<endl;
+			cout<<"order:";
+			for (uint32_t i = 0; i < cudaData.numberOfActivities; ++i)
+				cout<<" "<<orders[s*cudaData.numberOfActivities+i];
+			cout<<endl;
+			cout<<"cost: "<<info[s].solutionCost<<endl;
+			cout<<"read counter: "<<info[s].readCounter<<endl;
+			cout<<"Iteration counter: "<<info[s].iterationCounter<<endl;
+			cout<<string(30,'-')<<endl;
+			iterations += info[s].iterationCounter;
+		}
+		cout<<"Total iterations: "<<iterations<<endl;
+	}
+
+	delete[] orders;
+	delete[] info;
+
 
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);

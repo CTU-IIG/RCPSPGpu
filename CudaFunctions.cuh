@@ -47,7 +47,7 @@ struct SolutionInfo {
 	//! How many times was the solution read without improving of the cost.
 	uint32_t readCounter;
 	//! The number of iterations performed at this solution.
-	uint64_t iterationCounter;
+	uint32_t iterationCounter;
 };
 
 /*!
