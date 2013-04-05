@@ -212,12 +212,6 @@ void ScheduleSolver::createInitialSolution(const InstanceData& project, Instance
 					newCurrentLevel[project.successorsOfActivity[activityId][nextLevelIdx]] = 1;
 					anyActivity = true;
 				}
-		/*		for (vector<Edge>::const_iterator it = project.addedEdges.begin(); it != project.addedEdges.end(); ++it)	{
-					if (it->i == activityId)	{
-						newCurrentLevel[it->j] = 1;
-						anyActivity = true;
-					}
-				} */
 				levels[activityId] = deep;
 			}
 		}
@@ -329,11 +323,11 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 			cout<<"Device name: "<<prop.name<<endl;
 			cout<<"Device compute capability: "<<prop.major<<"."<<prop.minor<<endl;
 			cout<<"Number of multiprocessors: "<<prop.multiProcessorCount<<endl;
-			cout<<"Clock rate: "<<prop.clockRate<<endl;
-			cout<<"Size of global memory: "<<prop.totalGlobalMem<<endl;
-			cout<<"Size of shared memory per multiprocessor: "<<prop.sharedMemPerBlock<<endl;
-			cout<<"Number of 32-bit registers per multiprocessor: "<<prop.regsPerBlock<<endl;
-			cout<<"Size of constant memory: "<<prop.totalConstMem<<endl<<endl;
+			cout<<"Clock rate: "<<prop.clockRate/1000<<" MHz"<<endl;
+			cout<<"Size of constant memory: "<<prop.totalConstMem<<" B"<<endl;
+			cout<<"Size of shared memory per multiprocessor: "<<prop.sharedMemPerBlock<<" B"<<endl;
+			cout<<"Size of global memory: "<<prop.totalGlobalMem<<" B"<<endl;
+			cout<<"Number of 32-bit registers per multiprocessor: "<<prop.regsPerBlock<<endl<<endl;
 		}
 
 		cudaCapability = prop.major*100+prop.minor*10;
@@ -525,7 +519,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	// Print info...
 	if (verbose == true)	{
-		cout<<"Dynamic shared memory requirement: "<<dynSharedMemSize<<endl;
+		cout<<"Dynamic shared memory requirement: "<<dynSharedMemSize<<" B"<<endl;
 		cout<<"Number of threads per block: "<<numberOfThreadsPerBlock<<endl<<endl;
 	}
 
@@ -950,36 +944,6 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 		instanceSolution.bestScheduleOrder = NULL;
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
 	}
-/*
-	SolutionInfo *info = new SolutionInfo[cudaData.totalSolutions];
-	uint16_t *orders = new uint16_t[instance.numberOfActivities*cudaData.totalSolutions];
-	if (!cudaError && cudaMemcpy(orders, cudaData.ordersOfSolutions, cudaData.numberOfActivities*cudaData.totalSolutions*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)	{
-		cudaError = true;
-	}
-	if (!cudaError && cudaMemcpy(info, cudaData.infoAboutSolutions, cudaData.totalSolutions*sizeof(SolutionInfo), cudaMemcpyDeviceToHost) != cudaSuccess)	{
-		cudaError = true;
-	}
-
-	if (!cudaError)	{
-		uint64_t iterations = 0;
-		for (uint32_t s = 0; s < cudaData.totalSolutions; ++s)	{
-			cout<<string(30,'+')<<endl;
-			cout<<"order:";
-			for (uint32_t i = 0; i < cudaData.numberOfActivities; ++i)
-				cout<<" "<<orders[s*cudaData.numberOfActivities+i];
-			cout<<endl;
-			cout<<"cost: "<<info[s].solutionCost<<endl;
-			cout<<"read counter: "<<info[s].readCounter<<endl;
-			cout<<"Iteration counter: "<<info[s].iterationCounter<<endl;
-			cout<<string(30,'-')<<endl;
-			iterations += info[s].iterationCounter;
-		}
-		cout<<"Total iterations: "<<iterations<<endl;
-	}
-
-	delete[] orders;
-	delete[] info;
-*/
 
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);
@@ -1117,16 +1081,6 @@ uint16_t* ScheduleSolver::computeLowerBounds(const uint16_t& startActivityId, co
 							predecessorsBranches[p] = branches[predecessor];
 					}
 				}
-			/*	for (vector<InstanceData::Edge>::const_iterator it = project.addedEdges.begin(); it != project.addedEdges.end(); ++it)	{
-					if (activityId == it->j)	{
-						if (closedActivities[it->i] == false)	{
-							allPredecessorsClosed = false;
-							break;
-						} else {
-							minimalStartTime = max((int32_t) maxDistances[it->i]+it->weight, (int32_t) minimalStartTime);
-						}
-					}
-				} */
 				if (allPredecessorsClosed)	{
 					if (project.numberOfPredecessors[activityId] > 1 && energyReasoning) {
 						// Output branches are found out for the node with more predecessors.
@@ -1457,10 +1411,6 @@ void ScheduleSolver::changeDirectionOfEdges(InstanceData& project)	{
 	swap(project.successorsOfActivity, project.predecessorsOfActivity);
 	for (uint16_t i = 0; i < project.numberOfActivities; ++i)
 		swap(project.allSuccessorsCache[i], project.allPredecessorsCache[i]);
-//	for (vector<InstanceData::Edge>::iterator it = project.addedEdges.begin(); it != project.addedEdges.end(); ++it)	{
-//		it->weight = -project.durationOfActivities[it->i]+project.durationOfActivities[it->j]+it->weight;
-//		swap(it->i, it->j);
-//	}
 }
 
 vector<uint16_t>* ScheduleSolver::getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related, uint16_t numberOfActivities) {
