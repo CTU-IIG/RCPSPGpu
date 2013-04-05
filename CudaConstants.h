@@ -7,10 +7,6 @@
 #define TOTAL_SUM_OF_CAPACITY 331
 #define MAXIMAL_SUM_OF_FLOATS 744
 
-/* Hash constants. */
-#define HASH_TABLE_SIZE 16777216
-#define R 3144134277
-
 /* Blocks communication. */
 #define DATA_AVAILABLE 0
 #define DATA_ACCESS 1

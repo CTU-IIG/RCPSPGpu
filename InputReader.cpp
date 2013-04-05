@@ -317,10 +317,6 @@ void writeHeaderFile(const vector<string>& inputFiles, const string& headerFile)
 	output<<"#define TOTAL_SUM_OF_CAPACITY "<<maxTotalCapacity<<endl;
 	output<<"#define MAXIMAL_SUM_OF_FLOATS "<<maxSumOfFloats<<endl;
 	output<<endl;
-	output<<"/* Hash constants. */"<<endl;
-	output<<"#define HASH_TABLE_SIZE 16777216"<<endl;
-	output<<"#define R 3144134277"<<endl;
-	output<<endl;
 	output<<"/* Blocks communication. */"<<endl;
 	output<<"#define DATA_AVAILABLE 0"<<endl;
 	output<<"#define DATA_ACCESS 1"<<endl;

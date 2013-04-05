@@ -47,7 +47,7 @@ class ScheduleSolver {
 		 */
 		void printBestSchedule(bool verbose = true, std::ostream& output = std::cout);
 		/*!
-		 * \param filename The name of the file where results will be written.
+		 * \param fileName The name of the file where results will be written.
 		 * \exception invalid_argument The output file cannot be created, check the permissions.
 		 * \brief It writes required data structures and the best schedule to the given file.
 		 */
@@ -218,18 +218,21 @@ class ScheduleSolver {
 		 * \param related The related (= successors || predecessors) activities for each activity in the project.
 		 * \param numberOfActivities The total number of activities in the project.
 		 * \return It returns all activityId's successors or predecessors.
+		 * \warning It is your responsibility for freeing allocated memory of the returned vector.
 		 */
 		static std::vector<uint16_t>* getAllRelatedActivities(uint16_t activityId, uint16_t *numberOfRelated, uint16_t **related, uint16_t numberOfActivities);
 		/*!
 		 * \param activityId Identification of the activity.
 		 * \param project The data of the project.
 		 * \return It returns all activityId's successors.
+		 * \warning It is your responsibility for freeing allocated memory of the returned vector.
 		 */
 		static std::vector<uint16_t>* getAllActivitySuccessors(const uint16_t& activityId, const InstanceData& project);
 		/*!
 		 * \param activityId Identification of the activity.
 		 * \param project The data of the project.
 		 * \return It returns all activityId's predecessors.
+		 * \warning It is your responsibility for freeing allocated memory of the returned vector.
 		 */
 		static std::vector<uint16_t>* getAllActivityPredecessors(const uint16_t& activityId, const InstanceData& project);	
 
@@ -250,7 +253,14 @@ class ScheduleSolver {
 		//! Assignment operator is forbidden.
 		ScheduleSolver& operator=(const ScheduleSolver&);
 
-		//! TODO DOC
+		/*!
+		 * \tparam T A type of arrays.
+		 * \param array An input array.
+		 * \param size The number of elements of the input array.
+		 * \param value The value that should be added to the end of the returned array.
+		 * \return A copy of the input array with the value added to the end.
+		 * \warning You are responsible for calling 'delete' on the returned pointer.
+		 */
 		template <class T>
 		static T* copyAndPush(T* array, uint32_t size, T value);
 
@@ -340,10 +350,20 @@ class ScheduleSolver {
 
 		/* MISC DATA */
 		
-		// TODO DOC!
-		// The base data-structure - an element in the list for the "Extended Node Packing Bound" problem.
+		//! The list element for the "Extended Node Packing Bound" problem.
 		struct ListActivity {
+			/*!
+			 * \param id Activity ID.
+			 * \param par The number of activities which are able to run concurrently with the activity 'activityId'.
+			 * \param d The duration of the activity 'activityId'.
+			 * \brief It initialises public members of this structure.
+			 */
 			ListActivity(uint16_t id, uint16_t par, uint8_t d) : activityId(id), concurrencyCoeff(par), duration(d) { };
+			/*!
+			 * \param x A list element to be compared with this one.
+			 * \brief It determines the order in the list if the list is sorted.
+			 * \return true if (*this < x) else false.
+			 */
 			bool operator<(const ListActivity& x) const {
 				if (concurrencyCoeff < x.concurrencyCoeff)
 					return true;
@@ -355,8 +375,11 @@ class ScheduleSolver {
 					return false;
 			}
 
+			//! Activity ID.
 			uint16_t activityId;
+			//! The number of activities which can be processed simultaneously.
 			uint16_t concurrencyCoeff; 
+			//! The duration of the activity 'activityId'.
 			uint8_t duration;
 		};
 		

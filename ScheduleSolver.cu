@@ -22,6 +22,9 @@
 #ifndef UINT32_MAX
 #define UINT32_MAX 0xffffffff
 #endif
+#ifndef USHRT_MAX
+#define USHRT_MAX 0xffff
+#endif
 
 #include "ConfigureRCPSP.h"
 #include "CudaConstants.h"
@@ -30,7 +33,7 @@
 
 using namespace std;
 
-ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : totalRunTime(-1)	{
+ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : totalRunTime(0)	{
 	// Copy pointers to data of instance.
 	instance.numberOfResources = rcpspData.getNumberOfResources();
 	instance.capacityOfResources = rcpspData.getCapacityOfResources();
@@ -39,6 +42,17 @@ ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : tot
 	instance.numberOfSuccessors = rcpspData.getActivitiesNumberOfSuccessors();
 	instance.successorsOfActivity = rcpspData.getActivitiesSuccessors();
 	instance.requiredResourcesOfActivities = rcpspData.getActivitiesResources();
+
+	// It measures the start time of the initialisation.
+	#ifdef __GNUC__
+	timeval startTime, endTime, diffTime;
+	gettimeofday(&startTime, NULL);
+	#elif defined _WIN32 || defined _WIN64 || defined WIN32 || defined WIN64
+	LARGE_INTEGER ticksPerSecond;
+	LARGE_INTEGER startTimeStamp, stopTimeStamp;
+	QueryPerformanceFrequency(&ticksPerSecond);
+	QueryPerformanceCounter(&startTimeStamp);
+	#endif
 	
 	// Create required structures and copy data to GPU.
 	initialiseInstanceDataAndInitialSolution(instance, instanceSolution);
@@ -55,6 +69,16 @@ ScheduleSolver::ScheduleSolver(const InputReader& rcpspData, bool verbose) : tot
 			cout<<"All required resources allocated..."<<endl<<endl;
 		instanceSolution.bestScheduleOrder = NULL;
 	}
+
+	// It gets the finish time of the initialisation.
+	#ifdef __GNUC__
+	gettimeofday(&endTime, NULL);
+	timersub(&endTime, &startTime, &diffTime);
+	totalRunTime += diffTime.tv_sec+diffTime.tv_usec/1000000.;
+	#elif defined _WIN32 || defined _WIN64 || defined WIN32 || defined WIN64
+	QueryPerformanceCounter(&stopTimeStamp);
+	totalRunTime += (stopTimeStamp.QuadPart-startTimeStamp.QuadPart)/((double) ticksPerSecond.QuadPart);
+	#endif
 }
 
 void ScheduleSolver::initialiseInstanceDataAndInitialSolution(InstanceData& project, InstanceSolution& solution)	{
@@ -219,7 +243,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	/* PREPARE DATA PHASE */
 
-	/* CONVERT PREDECESSOR AND SUCCESSOR ARRAY TO 1D */
+	/* CONVERT PREDECESSOR AND SUCCESSOR ARRAYS TO 1D */
 	uint16_t numOfElPred = 0, numOfElSuc = 0;
 	uint16_t *predIdxs = new uint16_t[project.numberOfActivities+1], *sucIdxs = new uint16_t[project.numberOfActivities+1];
 
@@ -256,7 +280,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 		resIdxs[r+1] =  resIdxs[r]+project.capacityOfResources[r];
 	}
 
-	/* CREATE SUCCESSORS MATRIX + COMPUTE CRITICAL PATH MAKESPAN */
+	/* CREATE SUCCESSORS MATRIX */
 	uint32_t successorsMatrixSize = project.numberOfActivities*project.numberOfActivities/8;
 	if ((project.numberOfActivities*project.numberOfActivities) % 8 != 0)
 		++successorsMatrixSize;
@@ -280,43 +304,17 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	bool cudaError = false;
 
-	/* SET BASE CONFIG PARAMETERS */
-
 	cudaData.numberOfActivities = project.numberOfActivities;
 	cudaData.numberOfResources = project.numberOfResources;
 	cudaData.maxTabuListSize = ConfigureRCPSP::TABU_LIST_SIZE;
-	cudaData.totalSolutions = ConfigureRCPSP::NUMBER_OF_SET_SOLUTIONS;
 	cudaData.swapRange = ConfigureRCPSP::SWAP_RANGE;
 	cudaData.maximalValueOfReadCounter = ConfigureRCPSP::MAXIMAL_VALUE_OF_READ_COUNTER;
 	cudaData.numberOfDiversificationSwaps = ConfigureRCPSP::DIVERSIFICATION_SWAPS;
-	// Select evaluation algorithm.
-	if (project.numberOfActivities < 100)	{
-		cudaData.capacityResolutionAlgorithm = false;
-	} else if (project.numberOfActivities >= 100 && project.numberOfActivities < 140)	{
-		// It computes required parameters.
-		double branchFactor;
-		uint32_t sumOfCapacities = 0, sumOfSuccessors = 0;
-		uint8_t minimalResourceCapacity, maximalResourceCapacity;
-		for (uint8_t r = 0; r < project.numberOfResources; ++r)
-			sumOfCapacities += project.capacityOfResources[r];
-		for (uint16_t i = 0; i < project.numberOfActivities; ++i)
-			sumOfSuccessors += project.numberOfSuccessors[i];
-		minimalResourceCapacity = *min_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
-		maximalResourceCapacity = *max_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
-		branchFactor = (((double) sumOfSuccessors)/((double) project.numberOfActivities));
-		// Decision what evaluation algorithm should be used.
-		if (minimalResourceCapacity >= 29)
-			cudaData.capacityResolutionAlgorithm = false;
-		else if (sumOfCapacities >= 116 && branchFactor > 2.106)
-			cudaData.capacityResolutionAlgorithm = false;
-		else if (minimalResourceCapacity >= 25 && maximalResourceCapacity >= 42)
-			cudaData.capacityResolutionAlgorithm = false;
-		else
-			cudaData.capacityResolutionAlgorithm = true;
-	} else {
-		cudaData.capacityResolutionAlgorithm = true;
-	}
 	cudaData.criticalPathLength = project.criticalPathMakespan;
+	cudaData.sumOfCapacities = 0;
+	for (uint8_t i = 0; i < project.numberOfResources; ++i)
+		cudaData.sumOfCapacities += project.capacityOfResources[i];
+	cudaData.maximalCapacityOfResource = *max_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
 
 	/* GET CUDA INFO - SET NUMBER OF THREADS PER BLOCK */
 
@@ -341,57 +339,48 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 		cudaCapability = prop.major*100+prop.minor*10;
 		numberOfBlock = prop.multiProcessorCount*ConfigureRCPSP::NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR;
 
-		uint16_t sumOfCapacity = 0;
-		for (uint8_t i = 0; i < project.numberOfResources; ++i)
-			sumOfCapacity += project.capacityOfResources[i];
-
-		cudaData.sumOfCapacities = sumOfCapacity;
-		cudaData.maximalCapacityOfResource = *max_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
 		if (cudaCapability < 300)
 			numberOfThreadsPerBlock = 512;
 		else
 			numberOfThreadsPerBlock = 1024;
-
-		/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
-		dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
-		dynSharedMemSize += numberOfBlock*3*sizeof(Edge);	// !!! added edges for each block
-
-		if ((project.numberOfActivities-2)*cudaData.swapRange < USHRT_MAX)
-			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
-		else
-			dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint32_t); // merge help array
-
-		dynSharedMemSize += project.numberOfActivities*sizeof(uint16_t);	// block order
-		dynSharedMemSize += (project.numberOfResources+1)*sizeof(uint16_t);	// resources indices
-		dynSharedMemSize += project.numberOfActivities*sizeof(uint8_t);		// duration of activities
 
 		if (cudaCapability < 200)	{
 			cerr<<"Pre-Fermi cards aren't supported! Sorry..."<<endl;
 			cudaError = true;
 		}
 	} else {
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
-		cudaError = true;
+		cudaError = errorHandler(-2);
 	}
 
-	// If is possible to run 2 block (shared memory restriction) then copy successorsMatrix to shared memory.
-	if (dynSharedMemSize+successorsMatrixSize*sizeof(uint8_t) < 7950)	{
-		dynSharedMemSize += successorsMatrixSize*sizeof(uint8_t);
-		cudaData.copySuccessorsMatrixToSharedMemory = true;
-	} else	{
-		cudaData.copySuccessorsMatrixToSharedMemory = false;
-	}
-	cudaData.successorsMatrixSize = successorsMatrixSize;
+	/* EVALUTATION ALGORITHM SELECTION */
 
-	if (verbose == true)	{
-		cout<<"Dynamic shared memory requirement: "<<dynSharedMemSize<<endl;
-		cout<<"Number of threads per block: "<<numberOfThreadsPerBlock<<endl<<endl;
+	if (project.numberOfActivities < 100)	{
+		cudaData.capacityResolutionAlgorithm = false;
+	} else if (project.numberOfActivities >= 100 && project.numberOfActivities < 140)	{
+		// It computes required parameters.
+		uint32_t sumOfCapacities = cudaData.sumOfCapacities, sumOfSuccessors = 0;
+		uint8_t minimalResourceCapacity, maximalResourceCapacity = cudaData.maximalCapacityOfResource;
+		for (uint16_t i = 0; i < project.numberOfActivities; ++i)
+			sumOfSuccessors += project.numberOfSuccessors[i];
+		minimalResourceCapacity = *min_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
+		double branchFactor = (((double) sumOfSuccessors)/((double) project.numberOfActivities));
+		// Decision what evaluation algorithm should be used.
+		if (minimalResourceCapacity >= 29)
+			cudaData.capacityResolutionAlgorithm = false;
+		else if (sumOfCapacities >= 116 && branchFactor > 2.106)
+			cudaData.capacityResolutionAlgorithm = false;
+		else if (minimalResourceCapacity >= 25 && maximalResourceCapacity >= 42)
+			cudaData.capacityResolutionAlgorithm = false;
+		else
+			cudaData.capacityResolutionAlgorithm = true;
+	} else {
+		cudaData.capacityResolutionAlgorithm = true;
 	}
+
 
 	/* COPY ACTIVITIES DURATION TO CUDA */
 	if (!cudaError && cudaMalloc((void**) &cudaData.durationOfActivities, project.numberOfActivities*sizeof(uint8_t)) != cudaSuccess)	{
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
-		cudaError = true;
+		cudaError = errorHandler(-2);
 	}
 	if (!cudaError && cudaMemcpy(cudaData.durationOfActivities, project.durationOfActivities, project.numberOfActivities*sizeof(uint8_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
 		cudaError = errorHandler(0);
@@ -511,6 +500,35 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	}
 
 
+	/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
+
+	dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
+	dynSharedMemSize += numberOfBlock*cudaData.numberOfAddedEdges*sizeof(Edge);	// added edges for each block
+	
+	if ((project.numberOfActivities-2)*cudaData.swapRange < USHRT_MAX)
+		dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
+	else
+		dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint32_t); // merge help array
+
+	dynSharedMemSize += project.numberOfActivities*sizeof(uint16_t);	// block order
+	dynSharedMemSize += (project.numberOfResources+1)*sizeof(uint16_t);	// resources indices
+	dynSharedMemSize += project.numberOfActivities*sizeof(uint8_t);		// duration of activities
+
+	// If it is possible to run 2 block (shared memory restrictions) then copy successorsMatrix to shared memory.
+	if (dynSharedMemSize+successorsMatrixSize*sizeof(uint8_t) < 7950)	{
+		dynSharedMemSize += successorsMatrixSize*sizeof(uint8_t);
+		cudaData.copySuccessorsMatrixToSharedMemory = true;
+	} else	{
+		cudaData.copySuccessorsMatrixToSharedMemory = false;
+	}
+	cudaData.successorsMatrixSize = successorsMatrixSize;
+
+	// Print info...
+	if (verbose == true)	{
+		cout<<"Dynamic shared memory requirement: "<<dynSharedMemSize<<endl;
+		cout<<"Number of threads per block: "<<numberOfThreadsPerBlock<<endl<<endl;
+	}
+
 	/* FREE ALLOCATED TEMPORARY RESOURCES */
 	delete[] successorsMatrix;
 	delete[] resIdxs;
@@ -526,6 +544,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSolutions)	{
 
 	bool cudaError = false;
+	// Generate all disjunctive activity pairs, i.e. both activities in a pair cannot run concurrently.
 	vector<pair<uint16_t, uint16_t> > candidates;
 	for (uint16_t i = 0; i < instance.numberOfActivities; ++i)	{
 		for (uint16_t j = 0; j < instance.numberOfActivities; ++j)	{
@@ -539,29 +558,22 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 		}
 	}
 
-//	cout<<"Number Of disjunctive pairs: "<<candidates.size()<<endl;
-
 	srand(time(NULL));
 	uint32_t numberOfEdges = 0;
-	map<uint32_t, uint32_t> counters;
+	list<InstanceData> staticTree;
+	staticTree.push_back(instance);
 	vector<pair<uint8_t,void*> > allocatedMemory;
-	list<pair<uint16_t, InstanceData> > staticTree;
-	staticTree.push_back(pair<uint16_t, InstanceData>(0, instance));
 
 	while (staticTree.size() < numberOfSetSolutions && !staticTree.empty())	{
-		uint16_t deep = staticTree.front().first;
-		InstanceData parent = staticTree.front().second;
-		staticTree.pop_front();
+		InstanceData parent = staticTree.front();
 		uint16_t parentLowerBound = lowerBoundOfMakespan(parent);
-/*		// Start TIMER ...
-		timeval startTime, endTime, diffTime;
-		gettimeofday(&startTime, NULL);
-*/
+		staticTree.pop_front();
+
 		bool threadsStop = false;
 		InstanceData bestChild1, bestChild2;
 		uint32_t bestBranchCost = UINT32_MAX;
 		random_shuffle(candidates.begin(), candidates.end());
-//		cout<<"START ITERATION"<<endl;
+		// Try each candidate (a pair of disjunctive activities) and select the best one.
 		#pragma omp parallel for 
 		for (uint32_t o = 0; o < candidates.size(); ++o)	{
 			if (!threadsStop)	{
@@ -569,6 +581,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 				InstanceData child1 = parent, child2 = parent;
 				uint16_t i = candidates[o].first, j = candidates[o].second;
 
+				// Check if there is no path between both candidate activities.
 				bool alreadyAdded = false;
 				for (vector<Edge>::const_iterator it = parent.addedEdges.begin(); it != parent.addedEdges.end(); ++it)	{
 					if ((it->i == i && it->j == j) || (it->i == j && it->j == i)
@@ -582,6 +595,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 				if (alreadyAdded)
 					continue;
 
+				// Create two leaf-nodes for both added edges.
 				for (uint8_t s = 0; s < 2; ++s)	{
 					// Select edge (i,j) or (j,i).
 					InstanceData& child = (s == 0 ? child1 : child2);
@@ -664,6 +678,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 					// Swap direction of the edge.
 					swap(i,j);
 				}
+
 				uint16_t lb1 = lowerBoundOfMakespan(child1);
 				uint16_t lb2 = lowerBoundOfMakespan(child2);
 				if (lb1 + lb2 <= 2*parentLowerBound)	{
@@ -680,42 +695,18 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 					bestChild1.addedEdges.push_back(edge1);
 					bestChild2.addedEdges.push_back(edge2);
 				}
-				++counters[lb1+lb2];
 				}
 			}
 		}
 
-		// STOP TIMER...
-/*		gettimeofday(&endTime, NULL);
-		timersub(&endTime, &startTime, &diffTime);
-		double totalRunTime = diffTime.tv_sec+diffTime.tv_usec/1000000.;
-		cout<<"Runtime: "<<totalRunTime<<endl;
-*/
 		if (bestBranchCost < UINT32_MAX)	{
 			numberOfEdges = max((size_t) numberOfEdges, max(bestChild1.addedEdges.size(), bestChild2.addedEdges.size()));
-			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild1));
-			staticTree.push_back(pair<uint16_t,InstanceData>(deep+1, bestChild2));
+			staticTree.push_back(bestChild1);
+			staticTree.push_back(bestChild2);
 		}
-//		cout<<"STOP ITERATION"<<endl;
 	}
-/*
-	for (map<uint32_t,uint32_t>::const_iterator it = counters.begin(); it != counters.end(); ++it)	{
-		cout<<it->first<<" -> "<<it->second<<endl;
-	}
-*/
-	cout<<"Total number of modified instances: "<<staticTree.size()<<endl;
-/*	for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
-		cout<<string(50,'+')<<endl;
-		cout<<"Solution lower bound: "<<lowerBoundOfMakespan(it->second)<<endl;
-		cout<<"Deep: "<<it->first<<endl;
-		cout<<"Edges:";
-		for (vector<Edge>::const_iterator it2 = it->second.addedEdges.begin(); it2 != it->second.addedEdges.end(); ++it2)
-			cout<<" ("<<it2->i<<","<<it2->j<<")";
-		cout<<endl;
-		cout<<string(50,'-')<<endl;
-	} */
 
-	// Convert tree list-nodes to GPU solutions.
+	// Convert tree leaf-nodes to GPU solutions.
 	bool solutionsExtractedFromStaticTree = false;
 	uint32_t bestScheduleLength = UINT32_MAX, indexToBestSchedule = 0;
 	Edge *addedEdges = new Edge[numberOfSetSolutions*numberOfEdges];
@@ -724,22 +715,22 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 	if (staticTree.size() == numberOfSetSolutions)	{
 		solutionsExtractedFromStaticTree = true;
 		uint32_t infoWriterIdx = 0, edgeWriterIdx = 0;
-		for (list<pair<uint16_t,InstanceData> >::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
+		for (list<InstanceData>::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
 			InstanceSolution nodeSolution;
-			createInitialSolution(it->second, nodeSolution);
-			uint32_t scheduleLength = shakingDownEvaluation(it->second, nodeSolution, solutionsPtr);
-			convertStartTimesById2ActivitiesOrder(it->second, nodeSolution, solutionsPtr);
+			createInitialSolution(*it, nodeSolution);
+			uint32_t scheduleLength = shakingDownEvaluation(*it, nodeSolution, solutionsPtr);
+			convertStartTimesById2ActivitiesOrder(*it, nodeSolution, solutionsPtr);
 			if (scheduleLength < bestScheduleLength)	{
 				bestScheduleLength = scheduleLength;
 				indexToBestSchedule = infoWriterIdx;
 			}
 			infoAboutSolutions[infoWriterIdx].solutionCost = scheduleLength;
 			infoAboutSolutions[infoWriterIdx].readCounter = infoAboutSolutions[infoWriterIdx].iterationCounter = 0;
-			solutionsPtr = copy(nodeSolution.orderOfActivities, nodeSolution.orderOfActivities+it->second.numberOfActivities, solutionsPtr);
+			solutionsPtr = copy(nodeSolution.orderOfActivities, nodeSolution.orderOfActivities+it->numberOfActivities, solutionsPtr);
 			delete[] nodeSolution.orderOfActivities; ++infoWriterIdx;
 			for (uint32_t i = 0; i < numberOfEdges; ++i)    {
-				if (i < it->second.addedEdges.size())	{
-					addedEdges[edgeWriterIdx++] = it->second.addedEdges[i];
+				if (i < it->addedEdges.size())	{
+					addedEdges[edgeWriterIdx++] = it->addedEdges[i];
 				} else {
 					 Edge zeroEdge = { 0, 0, 0 };
 					 addedEdges[edgeWriterIdx++] = zeroEdge;
@@ -767,14 +758,6 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 		}
 		memset(addedEdges, 0, numberOfSetSolutions*numberOfEdges*sizeof(Edge));
 	}
-/*
-	for (uint32_t s = 0; s < numberOfSetSolutions; ++s)	{
-		cout<<"order"<<s<<":";
-		for (uint32_t i = 0; i < cudaData.numberOfActivities; ++i)	{
-			cout<<" "<<solutions[s*cudaData.numberOfActivities+i];
-		}
-		cout<<endl;
-	} */
 
 	// Copy solutions to GPU memory.
 	cudaData.totalSolutions = numberOfSetSolutions;
@@ -859,7 +842,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 }
 
 bool ScheduleSolver::errorHandler(int16_t phase)	{
-	if (phase >= 0)
+	if (phase != -1)
 		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 
 	switch (phase)	{
@@ -962,7 +945,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	}
 
 	if (cudaError == true)	{
-		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
+		errorHandler(-2);
 		delete[] instanceSolution.bestScheduleOrder;
 		instanceSolution.bestScheduleOrder = NULL;
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
@@ -1001,10 +984,10 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);
 	timersub(&endTime, &startTime, &diffTime);
-	totalRunTime = diffTime.tv_sec+diffTime.tv_usec/1000000.;
+	totalRunTime += diffTime.tv_sec+diffTime.tv_usec/1000000.;
 	#elif defined _WIN32 || defined _WIN64 || defined WIN32 || defined WIN64
 	QueryPerformanceCounter(&stopTimeStamp);
-	totalRunTime = (stopTimeStamp.QuadPart-startTimeStamp.QuadPart)/((double) ticksPerSecond.QuadPart);
+	totalRunTime += (stopTimeStamp.QuadPart-startTimeStamp.QuadPart)/((double) ticksPerSecond.QuadPart);
 	#endif
 }
 
@@ -1265,22 +1248,20 @@ uint16_t ScheduleSolver::lowerBoundOfMakespan(const InstanceData& project) {
 		// It creates the new subset of the unprocessed activities.
 		uint16_t activityId1 = listOfActivities[i].activityId, subsetDuration = listOfActivities[i].duration;
 		if (subsetDuration > 0)	{
-			// It computes an estimate of the lower bound.
+			// It computes an estimate of the lower and upper bounds.
+			uint16_t *lb = computeLowerBounds(0, copyOfProject, true);
 	 		changeDirectionOfEdges(copyOfProject);
 	 		uint16_t *ub = computeLowerBounds(copyOfProject.numberOfActivities-1, copyOfProject, true);
 	 		changeDirectionOfEdges(copyOfProject);
-			uint16_t *lb = computeLowerBounds(0, copyOfProject, true);
 			maximalLowerBound = max(maximalLowerBound, (uint16_t) (lowerBound+max(lb[copyOfProject.numberOfActivities-1], ub[0])));
 			delete[] lb; delete[] ub;
 
 			// All activities which are able to run concurrently with activity "activityId1" have reduced duration.
 			for (uint16_t j = i+1; j < copyOfProject.numberOfActivities; ++j)	{
-				if (j != i)	{
-					uint8_t durationJ = listOfActivities[j].duration;
-					uint16_t activityId2 = listOfActivities[j].activityId;
-					if (project.disjunctiveActivities[activityId1][activityId2] == false && durationJ > 0)
-						copyOfProject.durationOfActivities[activityId2] = listOfActivities[j].duration = ((durationJ > subsetDuration) ? durationJ-subsetDuration : 0);
-				}
+				uint8_t durationJ = listOfActivities[j].duration;
+				uint16_t activityId2 = listOfActivities[j].activityId;
+				if (project.disjunctiveActivities[activityId1][activityId2] == false && durationJ > 0)
+					copyOfProject.durationOfActivities[activityId2] = listOfActivities[j].duration = ((durationJ > subsetDuration) ? durationJ-subsetDuration : 0);
 			}
 
 			// Remove the selected activity from the list.

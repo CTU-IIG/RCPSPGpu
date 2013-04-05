@@ -240,7 +240,7 @@ inline __device__ void cudaAddActivity(const uint16_t& activityId, const uint16_
  * \return Schedule length without any penalties.
  * \brief Function evaluate schedule and return total schedule length.
  */
-__device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration, uint16_t *&resourceIndices,
+inline __device__ uint16_t cudaEvaluateOrder(const CudaData& cudaData, uint16_t *&blockOrder, const uint16_t& indexI, const uint16_t& indexJ, uint8_t *&activitiesDuration, uint16_t *&resourceIndices,
 		uint16_t *resourcesLoad, uint16_t *startValues, uint8_t *remainingResourcesCapacity, uint16_t *startTimesWriterById, bool capacityResolution, bool forward = true)	{
 
 	// Current cost of the schedule.
@@ -359,7 +359,7 @@ inline __device__ bool cudaGetMatrixBit(const uint8_t * const& successorsMatrix,
  * \return True if current swap won't break relation precedences else false.
  * \brief Check if requested move is precedence penalty free.
  */
-__device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
+inline __device__ bool cudaCheckSwapPrecedencePenalty(const uint16_t * const& order, const uint8_t * const& successorsMatrix, const uint16_t& numberOfActivities, int16_t i, int16_t j, bool light = false)	{
 	if (i > j)	{
 		int16_t t = i;
 		i = j; j = t;
@@ -401,7 +401,7 @@ __device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *succe
 }
 
 /* SOFT VIOLATION PENALTIES */
-#include <cstdio>
+
 /*!
  * \param numberOfActivities The number of the activities in the project.
  * \param activitiesDuration Duration of each activity.
@@ -409,7 +409,7 @@ __device__ uint32_t cudaComputePrecedencePenalty(uint16_t numAct, uint8_t *succe
  * \param startTimesById Array of start time values of the scheduled activities ordered by ID's.
  * \return It returns overall tardiness penalty.
  */
-__device__ uint32_t cudaComputeTardinessPenalty(uint16_t numberOfActivities, uint8_t *activitiesDuration, uint32_t makespan, uint16_t *startTimesById)	{
+inline __device__ uint32_t cudaComputeTardinessPenalty(uint16_t numberOfActivities, uint8_t *activitiesDuration, uint32_t makespan, uint16_t *startTimesById)	{
 	uint32_t overhangPenalty = 0;
 	for (uint16_t id = 0; id < numberOfActivities; ++id)	{
 		if (startTimesById[id]+activitiesDuration[id]+rightLeftLongestPaths[id] > makespan)
@@ -424,14 +424,12 @@ __device__ uint32_t cudaComputeTardinessPenalty(uint16_t numberOfActivities, uin
  * \param startTimesById Array of start time values computed by the evaluation algorithm.
  * \return The precedence penalty.
  */
-__device__ uint32_t cudaComputePenaltyOfEdgeViolations(const CudaData& cudaData, Edge *& addedEdges, uint16_t *startTimesById)	{
+inline __device__ uint32_t cudaComputePenaltyOfEdgeViolations(const CudaData& cudaData, Edge *& addedEdges, uint16_t *startTimesById)	{
 	uint32_t precedencePenalty = 0;
 	for (uint32_t e = 0; e < cudaData.numberOfAddedEdges; ++e)	{
 		if (startTimesById[addedEdges[e].i]+addedEdges[e].weight > startTimesById[addedEdges[e].j])
 			precedencePenalty += startTimesById[addedEdges[e].i]+addedEdges[e].weight-startTimesById[addedEdges[e].j];
 	}
-	if (precedencePenalty > 1000)
-		printf("penalty: %d\n", precedencePenalty);
 	return precedencePenalty;
 }
 
@@ -671,14 +669,13 @@ inline __device__ void cudaDiversificationOfSolution(const uint16_t& numberOfAct
 /*	CUDA IMPLEMENT OF GLOBAL KERNEL */
 
 /*!
- * Global function for RCPSP problem. Blocks communicate with each other through global memory.
- * Local variables are coalesced. Dynamic shared memory and texture memory is used.
+ * Global function dealing with the RCPSP problem. Blocks communicate with each other through global memory.
+ * Local variables are coalesced. Dynamic shared memory, texture memory and constant memory are used.
  * \param cudaData All required constants, pointers to device memory, setting variables, ....
- * \brief Solve RCPSP problem on GPU.
+ * \brief Solve the RCPSP problem using GPU.
  */
 __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	
-	__shared__ bool initialized;
 	__shared__ uint32_t iter;
 	__shared__ MoveInfo iterBestMove;
 	__shared__ Edge *blockAddedEdges;
@@ -722,7 +719,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	if (threadIdx.x == 0)	{
 		/* SET VARIABLES */
 		iter = 0;
-		initialized = false;
 		blockTabuIdx = 0;
 		blockWriteBestBlock = false;
 		blockReadSetSolution = false;
@@ -846,10 +842,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			totalEval += cudaComputePenaltyOfEdgeViolations(cudaData, blockAddedEdges, threadStartTimesById);
 			totalEval = (totalEval > 0x0000ffff ? 0xffff0000 : totalEval<<16);
 			totalEval |= (curand(&threadRandState) & 0x0000ffff);
-			uint32_t precedencePenalty = cudaComputePrecedencePenalty(cudaData.numberOfActivities, blockSuccessorsMatrix, blockActivitiesDuration, threadStartTimesById);
-			if (precedencePenalty > 0)	{
-				printf("ERROR: block %d, thread %d, infeasible solution!\n", blockIdx.x, threadIdx.x);
-			}
 			bool isPossibleMove = cudaIsPossibleMove(cudaData.numberOfActivities, move->i, move->j, blockTabuCache);
 			if ((isPossibleMove && totalEval < threadBestCost) || (totalEval>>16) < blockBestCost)	{
 				struct MoveInfo newBestThreadSolution = { move->i, move->j, totalEval };
@@ -936,13 +928,11 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			__syncthreads();
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				blockBestSolution[i] = blockCurrentOrder[i];
-			blockWriteBestBlock = false; initialized = true;
+			blockWriteBestBlock = false;
 		}
 		__syncthreads();
 
 		if (blockWriteSetSolution == true)	{
-			if (!initialized)
-				printf("ERROR - write not-initialized solution!!\n");
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				cudaData.ordersOfSolutions[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
@@ -974,8 +964,8 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 					uint32_t readCounter = ++cudaData.infoAboutSolutions[blockIndexOfSetSolution].readCounter;
 					blockNumberOfIterationsSinceBest = 0;
 
-					blockReadSetSolution = false; initialized = false;
-					blockMaximalNumberOfIterationsSinceBest = curand(&randState) % cudaData.maximalIterationsSinceBest;
+					blockReadSetSolution = false;
+					blockMaximalNumberOfIterationsSinceBest = cudaData.maximalIterationsSinceBest; //curand(&randState) % cudaData.maximalIterationsSinceBest;
 					atomicExch(cudaData.lockSetOfSolutions, DATA_AVAILABLE);
 					if (readCounter > cudaData.maximalValueOfReadCounter)
 						cudaDiversificationOfSolution(cudaData.numberOfActivities, blockCurrentOrder, blockSuccessorsMatrix, cudaData.numberOfDiversificationSwaps, &randState);
@@ -997,10 +987,6 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 	__syncthreads();
 
 	if (*cudaData.bestSolutionCost > blockBestCost)	{
-		if (threadIdx.x == 0 && !initialized)	{
-			printf("ERROR - write not-initialized solution!!\n");
-			printf("original %d; new %d\n", *cudaData.bestSolutionCost, blockBestCost);
-		}
 		for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 			cudaData.ordersOfSolutions[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 		for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
