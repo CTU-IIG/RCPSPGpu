@@ -956,9 +956,13 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 					blockIndexOfSetSolution = (blockIndexOfSetSolution+1) % cudaData.totalSolutions;
 				}
 				__syncthreads();
-				// Read solution from a set to block memory.
+				// Read a solution from a set to block memory.
 				cudaReadExternalSolution(cudaData.numberOfActivities, blockTabuList, blockTabuCache, blockTabuListSize, blockCurrentOrder,
 						cudaData.ordersOfSolutions+blockIndexOfSetSolution*cudaData.numberOfActivities, cudaData.tabuListsOfSetOfSolutions+blockIndexOfSetSolution*cudaData.maxTabuListSize);
+				for (uint32_t i = threadIdx.x; i < cudaData.numberOfAddedEdges; i += blockDim.x)	{
+					blockAddedEdges[i] = cudaData.addedEdges[blockIndexOfSetSolution*cudaData.numberOfAddedEdges+i];
+				}
+
 				if (threadIdx.x == 0)	{
 					blockBestCost = cudaData.infoAboutSolutions[blockIndexOfSetSolution].solutionCost;
 					uint32_t readCounter = ++cudaData.infoAboutSolutions[blockIndexOfSetSolution].readCounter;
