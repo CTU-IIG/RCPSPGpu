@@ -35,11 +35,10 @@ class ScheduleSolver {
 
 		/*!
 		 * \param maxIter Number of iterations that should be performed.
-		 * \param maxIterSinceBest Maximal number of iterations since last improving move than another solution will be read.
 		 * \exception runtime_error Cuda error occur.
 		 * \brief Use GPU version of tabu search to find good quality solution.
 		 */
-		void solveSchedule(const uint32_t& maxIter = ConfigureRCPSP::NUMBER_OF_ITERATIONS, const uint32_t& maxIterSinceBest = ConfigureRCPSP::MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST);
+		void solveSchedule(const uint32_t& maxIter = ConfigureRCPSP::NUMBER_OF_ITERATIONS);
 		/*!
 		 * \param verbose If false then only result makespan, critical path makespan and computational time will be printed.
 		 * \param output Output stream.
@@ -286,8 +285,6 @@ class ScheduleSolver {
 			uint16_t *numberOfPredecessors;
 			//! Sources that are required by activities.
 			uint8_t **requiredResourcesOfActivities;
-			//! Matrix of successors. (if matrix(i,j) == 1 then "Exist precedence edge between activities i and j")
-			int8_t **matrixOfSuccessors;
 			//! Critical Path Makespan. (Critical Path Method)
 			int32_t criticalPathMakespan;
 			//! The longest paths from the end activity in the transformed graph.
@@ -342,10 +339,6 @@ class ScheduleSolver {
 		uint16_t *cudaPredecessorsArray;
 		//! Texture array of predecessors indices.
 		uint16_t *cudaPredecessorsIdxsArray;
-		//! Texture array of successors.
-		uint16_t *cudaSuccessorsArray;
-		//! Texture array of successors indices.
-		uint16_t *cudaSuccessorsIdxsArray; 
 		
 
 		/* MISC DATA */

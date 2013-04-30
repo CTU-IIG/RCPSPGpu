@@ -81,8 +81,6 @@ int rcpspGpu(int argc, char* argv[])	{
 		try {
 			if (arg == "--number-of-iterations-per-block" || arg == "-noipb" || arg == "-noi")
 				ConfigureRCPSP::NUMBER_OF_ITERATIONS = optionHelper("--number-of-iterations-per-block", i, argc, argv);
-			if (arg == "--max-iter-since-best" || arg == "-misb")
-				ConfigureRCPSP::MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST = optionHelper("--max-iter-since-best", i, argc, argv);
 			if (arg == "--tabu-list-size" || arg == "-tls")
 				ConfigureRCPSP::TABU_LIST_SIZE = optionHelper("--tabu-list-size", i, argc, argv);
 			if (arg == "--swap-range" || arg == "-sr" || arg == "-swr")
@@ -112,8 +110,6 @@ int rcpspGpu(int argc, char* argv[])	{
 			cout<<"\t\t"<<"Instances data. Input files are delimited by space."<<endl;
 			cout<<"\t"<<"--number-of-iterations-per-block ARG, -noipb ARG, ARG=POSITIVE_INTEGER"<<endl;
 			cout<<"\t\t"<<"Number of iterations per block after which the search process will be stopped."<<endl;
-			cout<<"\t"<<"--max-iter-since-best ARG, -misb ARG, ARG=POSITIVE_INTEGER"<<endl;
-			cout<<"\t\t"<<"Maximal number of iterations without improving solution after which another solution will be read."<<endl;
 			cout<<"\t"<<"--tabu-list-size ARG, -tls ARG, ARG=POSITIVE_INTEGER"<<endl;
 			cout<<"\t\t"<<"Size of the tabu list located at the GPU memory."<<endl;
 			cout<<"\t"<<"--swap-range ARG, -sr ARG, ARG=POSITIVE_INTEGER"<<endl;
@@ -157,7 +153,7 @@ int rcpspGpu(int argc, char* argv[])	{
 			// Init schedule solver.
 			ScheduleSolver solver(reader, verbose);
 			// Solve read instance.	
-			solver.solveSchedule(ConfigureRCPSP::NUMBER_OF_ITERATIONS, ConfigureRCPSP::MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST);
+			solver.solveSchedule(ConfigureRCPSP::NUMBER_OF_ITERATIONS);
 			// Print results.
 			if (verbose == true)	{
 				solver.printBestSchedule();

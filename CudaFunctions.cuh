@@ -94,8 +94,6 @@ struct CudaData {
 	uint8_t maximalCapacityOfResource;
 	//! Number of iterations per one block.
 	uint32_t numberOfIterationsPerBlock;
-	//! Maximal number of iterations than another solution will be read.
-	uint32_t maximalIterationsSinceBest;
 
 	//! Duration of activities.
 	uint8_t *durationOfActivities;

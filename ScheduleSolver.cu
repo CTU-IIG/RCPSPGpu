@@ -120,20 +120,6 @@ void ScheduleSolver::initialiseInstanceDataAndInitialSolution(InstanceData& proj
 
 	createInitialSolution(project, solution);
 	
-	/* PRECOMPUTE MATRIX OF SUCCESSORS */
-
-	project.matrixOfSuccessors = new int8_t*[project.numberOfActivities];
-	for (uint16_t i = 0; i < project.numberOfActivities; ++i)	{
-		project.matrixOfSuccessors[i] = new int8_t[project.numberOfActivities];
-		memset(project.matrixOfSuccessors[i], 0, sizeof(int8_t)*project.numberOfActivities);
-	}
-
-	for (uint16_t activityId = 0; activityId < project.numberOfActivities; ++activityId)	{
-		for (uint16_t j = 0; j < project.numberOfSuccessors[activityId]; ++j)	{
-			project.matrixOfSuccessors[activityId][project.successorsOfActivity[activityId][j]] = 1;
-		}
-	}
-	
 	/* IT COMPUTES THE CRITICAL PATH LENGTH */
 	uint16_t *lb1 = computeLowerBounds(0, project);
 	if (project.numberOfActivities > 1)
@@ -237,25 +223,20 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	/* PREPARE DATA PHASE */
 
-	/* CONVERT PREDECESSOR AND SUCCESSOR ARRAYS TO 1D */
-	uint16_t numOfElPred = 0, numOfElSuc = 0;
-	uint16_t *predIdxs = new uint16_t[project.numberOfActivities+1], *sucIdxs = new uint16_t[project.numberOfActivities+1];
+	/* CONVERT PREDECESSOR ARRAYS TO 1D */
+	uint16_t numOfElPred = 0;
+	uint16_t *predIdxs = new uint16_t[project.numberOfActivities+1];
 
-	predIdxs[0] = sucIdxs[0] = 0;
+	predIdxs[0] = 0;
 	for (uint16_t i = 0; i < project.numberOfActivities; ++i)	{
-		numOfElSuc += project.numberOfSuccessors[i];
 		numOfElPred += project.numberOfPredecessors[i];
-		sucIdxs[i+1] = numOfElSuc;
 		predIdxs[i+1] = numOfElPred;
 	}
 
-	uint16_t *linSucArray = new uint16_t[numOfElSuc], *linPredArray = new uint16_t[numOfElPred];
-	uint16_t *sucWr = linSucArray, *predWr = linPredArray;
+	uint16_t *linPredArray = new uint16_t[numOfElPred], *predWr = linPredArray;
 	for (uint16_t i = 0; i < project.numberOfActivities; ++i)	{
 		for (uint16_t j = 0; j < project.numberOfPredecessors[i]; ++j)
 			*(predWr++) = project.predecessorsOfActivity[i][j];
-		for (uint16_t j = 0; j < project.numberOfSuccessors[i]; ++j)
-			*(sucWr++) = project.successorsOfActivity[i][j];
 	}
 
 	/* CONVERT ACTIVITIES RESOURCE REQUIREMENTS TO 1D ARRAY */
@@ -467,37 +448,17 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	if (!cudaError && cudaMemset(cudaData.evaluatedSchedules, 0, sizeof(uint64_t)) != cudaSuccess)	{
 		cudaError = errorHandler(21);
 	}
-
-	/* COPY SUCCESSORS+INDICES TO CUDA TEXTURE MEMORY */
-	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsArray, numOfElSuc*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(21);
-	}
-	if (!cudaError && cudaMemcpy(cudaSuccessorsArray, linSucArray, numOfElSuc*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(22);
-	}
-	if (!cudaError && bindTexture(cudaSuccessorsArray, numOfElSuc, SUCCESSORS) != cudaSuccess)	{
-		cudaError = errorHandler(22);
-	}
-	if (!cudaError && cudaMalloc((void**) &cudaSuccessorsIdxsArray, (project.numberOfActivities+1)*sizeof(uint16_t)) != cudaSuccess)	{
-		cudaError = errorHandler(23);
-	}
-	if (!cudaError && cudaMemcpy(cudaSuccessorsIdxsArray, sucIdxs, (project.numberOfActivities+1)*sizeof(uint16_t), cudaMemcpyHostToDevice) != cudaSuccess)	{
-		cudaError = errorHandler(24);
-	}
-	if (!cudaError && bindTexture(cudaSuccessorsIdxsArray, project.numberOfActivities+1, SUCCESSORS_INDICES) != cudaSuccess)	{
-		cudaError = errorHandler(24);
-	}
 	
 	/* COPY THE LONGEST PATH TO THE CONSTANT MEMORY */
 	if (!cudaError && memcpyToSymbol((void*) project.rightLeftLongestPaths, project.numberOfActivities, THE_LONGEST_PATHS) != cudaSuccess)	{
-		cudaError = errorHandler(25);
+		cudaError = errorHandler(21);
 	}
 
 
 	/* COMPUTE DYNAMIC MEMORY REQUIREMENT */
 
 	dynSharedMemSize = numberOfThreadsPerBlock*sizeof(MoveInfo);	// merge array
-	dynSharedMemSize += numberOfBlock*cudaData.numberOfAddedEdges*sizeof(Edge);	// added edges for each block
+	dynSharedMemSize += cudaData.numberOfAddedEdges*sizeof(Edge);	// added edges for each block
 	
 	if ((project.numberOfActivities-2)*cudaData.swapRange < USHRT_MAX)
 		dynSharedMemSize += numberOfThreadsPerBlock*sizeof(uint16_t); // merge help array
@@ -527,9 +488,7 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	delete[] successorsMatrix;
 	delete[] resIdxs;
 	delete[] reqResLin;
-	delete[] linSucArray;
 	delete[] linPredArray;
-	delete[] sucIdxs;
 	delete[] predIdxs;
 
 	return cudaError;
@@ -712,6 +671,7 @@ bool ScheduleSolver::loadInitialSolutionsToGpu(const uint16_t& numberOfSetSoluti
 		for (list<InstanceData>::const_iterator it = staticTree.begin(); it != staticTree.end(); ++it)	{
 			InstanceSolution nodeSolution;
 			createInitialSolution(*it, nodeSolution);
+			makeDiversification(*it, nodeSolution);
 			uint32_t scheduleLength = shakingDownEvaluation(*it, nodeSolution, solutionsPtr);
 			convertStartTimesById2ActivitiesOrder(*it, nodeSolution, solutionsPtr);
 			if (scheduleLength < bestScheduleLength)	{
@@ -841,14 +801,6 @@ bool ScheduleSolver::errorHandler(int16_t phase)	{
 
 	switch (phase)	{
 		case -1:
-		case 25:
-			unbindTexture(SUCCESSORS_INDICES);
-		case 24:
-			cudaFree(cudaSuccessorsIdxsArray);
-		case 23:
-			unbindTexture(SUCCESSORS);
-		case 22:
-			cudaFree(cudaSuccessorsArray);
 		case 21:
 			cudaFree(cudaData.evaluatedSchedules);
 		case 20:
@@ -900,7 +852,7 @@ bool ScheduleSolver::errorHandler(int16_t phase)	{
 	return true;
 }
 
-void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxIterSinceBest)	{
+void ScheduleSolver::solveSchedule(const uint32_t& maxIter)	{
 	#ifdef __GNUC__
 	timeval startTime, endTime, diffTime;
 	gettimeofday(&startTime, NULL);
@@ -913,7 +865,6 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 
 	// Set iterations parameters.
 	cudaData.numberOfIterationsPerBlock = maxIter;
-	cudaData.maximalIterationsSinceBest = maxIterSinceBest;
 
 	/* RUN CUDA RCPSP SOLVER */
 
@@ -939,7 +890,7 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter, const uint32_t& maxI
 	}
 
 	if (cudaError == true)	{
-		errorHandler(-2);
+		cerr<<"Cuda error: "<<cudaGetErrorString(cudaGetLastError())<<endl;
 		delete[] instanceSolution.bestScheduleOrder;
 		instanceSolution.bestScheduleOrder = NULL;
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
@@ -1333,13 +1284,17 @@ uint16_t ScheduleSolver::computePrecedencePenalty(const InstanceData& project, c
 bool ScheduleSolver::checkSwapPrecedencePenalty(const InstanceData& project, const InstanceSolution& solution, uint16_t i, uint16_t j)	{
 	if (i > j) swap(i,j);
 	for (uint16_t k = i; k < j; ++k)	{
-		if (project.matrixOfSuccessors[solution.orderOfActivities[k]][solution.orderOfActivities[j]] == 1)	{
-			return false;
+		uint16_t kId = solution.orderOfActivities[k], jId = solution.orderOfActivities[j];
+		for (uint16_t actIdx = 0; actIdx < project.numberOfSuccessors[kId]; ++actIdx)	{
+			if (project.successorsOfActivity[kId][actIdx] == jId)
+				return false;
 		}
 	}
-	for (uint16_t k = i+1; k <= j; ++k)	{
-		if (project.matrixOfSuccessors[solution.orderOfActivities[i]][solution.orderOfActivities[k]] == 1)	{
-			return false;
+	for (uint16_t k = i+1; k < j; ++k)	{
+		uint16_t iId = solution.orderOfActivities[i], kId = solution.orderOfActivities[k];
+		for (uint16_t actIdx = 0; actIdx < project.numberOfSuccessors[iId]; ++actIdx)	{
+			if (project.successorsOfActivity[iId][actIdx] == kId)
+				return false;
 		}
 	}
 	return true;
@@ -1458,14 +1413,12 @@ ScheduleSolver::~ScheduleSolver()	{
 	// Free all allocated host memory.
 	for (uint16_t actId = 0; actId < instance.numberOfActivities; ++actId)	{
 		delete[] instance.predecessorsOfActivity[actId];
-		delete[] instance.matrixOfSuccessors[actId];
 		delete instance.allSuccessorsCache[actId];
 		delete instance.allPredecessorsCache[actId];
 		delete[] instance.disjunctiveActivities[actId];
 	}
 	delete[] instance.predecessorsOfActivity;
 	delete[] instance.numberOfPredecessors;
-	delete[] instance.matrixOfSuccessors;
 	delete[] instance.rightLeftLongestPaths;
 	delete[] instance.disjunctiveActivities;
 	delete[] instanceSolution.orderOfActivities;

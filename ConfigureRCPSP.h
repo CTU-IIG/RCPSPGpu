@@ -22,8 +22,6 @@ namespace ConfigureRCPSP {
 	extern uint32_t TABU_LIST_SIZE;
 	//! Number of search iterations.
 	extern uint32_t NUMBER_OF_ITERATIONS;
-	//! Maximal number of iterations without improving of the read solution than other solution will be read.
-	extern uint32_t MAXIMAL_NUMBER_OF_ITERATIONS_SINCE_BEST;
 	//! Maximal distance between swapped activities.
 	extern uint32_t SWAP_RANGE;
 	//! Number of diversification swaps.
