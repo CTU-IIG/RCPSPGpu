@@ -556,10 +556,10 @@ inline __device__ void cudaDiversificationOfSolution(const CudaData& data, uint1
 /* HEURISTIC - DIVIDING ITERATIONS AMONG SOLUTIONS */
 
 inline __device__ uint32_t calculateTheNumberOfAssignedIterationsSinceLoad(const CudaData& data, const uint32_t& indexOfSetSolution)	{
-	uint32_t quantity = (gridDim.x*data.numberOfIterationsPerBlock)/(3*data.totalSolutions);
+	uint32_t quantity = (gridDim.x*data.numberOfIterationsPerBlock)/(5*data.totalSolutions);
 	float p1 = (((float) data.infoAboutSolutions[indexOfSetSolution].iterationCounter)/((float) data.numberOfIterationsPerBlock));
 	float p2 = ((((float) data.infoAboutSolutions[indexOfSetSolution].solutionCost)/((float) *data.bestSolutionCost))-1.);
-	return (uint32_t) (quantity*(0.75*expf(-100.0*p2)+0.25*expf(-p1)));
+	return (uint32_t) (quantity*(0.8*expf(-100.0*p2)+0.2*expf(-4*p1)));
 }
 
 

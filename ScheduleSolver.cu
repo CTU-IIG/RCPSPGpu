@@ -896,6 +896,35 @@ void ScheduleSolver::solveSchedule(const uint32_t& maxIter)	{
 		throw runtime_error("ScheduleSolver::solveSchedule: Error occur when try to solve the instance!");
 	}
 
+	SolutionInfo *info = new SolutionInfo[cudaData.totalSolutions];
+	uint16_t *orders = new uint16_t[instance.numberOfActivities*cudaData.totalSolutions];
+	if (!cudaError && cudaMemcpy(orders, cudaData.ordersOfSolutions, cudaData.numberOfActivities*cudaData.totalSolutions*sizeof(uint16_t), cudaMemcpyDeviceToHost) != cudaSuccess)  {
+		cudaError = true;
+	}
+	if (!cudaError && cudaMemcpy(info, cudaData.infoAboutSolutions, cudaData.totalSolutions*sizeof(SolutionInfo), cudaMemcpyDeviceToHost) != cudaSuccess)   {
+		cudaError = true;
+	}
+
+	if (!cudaError)	{
+		uint64_t iterations = 0;
+		for (uint32_t s = 0; s < cudaData.totalSolutions; ++s)  {
+			cout<<string(30,'+')<<endl;
+			cout<<"order:";
+			for (uint32_t i = 0; i < cudaData.numberOfActivities; ++i)
+				cout<<" "<<orders[s*cudaData.numberOfActivities+i];
+			cout<<endl;
+			cout<<"cost: "<<info[s].solutionCost<<endl;
+			cout<<"read counter: "<<info[s].readCounter<<endl;
+			cout<<"Iteration counter: "<<info[s].iterationCounter<<endl;
+			cout<<string(30,'-')<<endl;
+			iterations += info[s].iterationCounter;
+		}
+		cout<<"Total iterations: "<<iterations<<endl;
+	}
+
+	delete[] orders;
+	delete[] info;
+
 	#ifdef __GNUC__
 	gettimeofday(&endTime, NULL);
 	timersub(&endTime, &startTime, &diffTime);
