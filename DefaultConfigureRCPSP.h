@@ -19,13 +19,13 @@
 //! Define maximal distance of swapped activities.
 #define DEFAULT_SWAP_RANGE 60
 //! Number of diversification swaps.
-#define DEFAULT_DIVERSIFICATION_SWAPS 10
+#define DEFAULT_DIVERSIFICATION_SWAPS 20
 //! Total number of generated set solutions.
 #define DEFAULT_NUMBER_OF_SET_SOLUTIONS 8
 //! Number of blocks (independent search processes) per multiprocessor of GPU.
 #define DEFAULT_NUMBER_OF_BLOCKS_PER_MULTIPROCESSOR 2
 //! Maximal value of read counter then diversification will be called.
-#define DEFAULT_MAXIMAL_VALUE_OF_READ_COUNTER 5
+#define DEFAULT_MAXIMAL_VALUE_OF_READ_COUNTER 3
 //! If you want to write the best schedule to a file set this variable to 1.
 #define DEFAULT_WRITE_RESULT_FILE 0
 
