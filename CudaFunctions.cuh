@@ -17,8 +17,6 @@ enum TextureName	{
 	ACTIVITIES_RESOURCES = 0,
 	PREDECESSORS = 1,
 	PREDECESSORS_INDICES = 2,
-	SUCCESSORS = 3,
-	SUCCESSORS_INDICES = 4
 };
 
 //! It defines the names of the structures in the device constant memory.
@@ -64,19 +62,6 @@ struct MoveInfo	{
 };
 
 /*!
- * \struct Edge
- * \brief A directed edge (i,j).
- */
-struct Edge {
-	//! Node i of directed edge (i,j), i corresponds to an activity ID.
-	int16_t i;
-	//! Node j of directed edge (i,j), j corresponds to an activity ID.
-	int16_t j;
-	//! The length of the edge.
-	int32_t weight;
-};
-
-/*!
  * \struct CudaData
  * \brief Basic constant variables, pointers to required data and configure parameters.
  */
@@ -117,12 +102,8 @@ struct CudaData {
 
 	//! Number of solutions at the solution set.
 	uint32_t totalSolutions;
-	//! Number of added edges per solution.
-	uint32_t numberOfAddedEdges;
 	//! Solutions (= orders) at set.
 	uint16_t *ordersOfSolutions;
-	//! Extra edges for each solution in the set.
-	Edge *addedEdges;
 	//! Info about each solution at set.
 	SolutionInfo *infoAboutSolutions;
 	//! Tabu list for each solution at set.

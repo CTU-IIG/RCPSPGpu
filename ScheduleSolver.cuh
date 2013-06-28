@@ -111,13 +111,6 @@ class ScheduleSolver {
 		static uint16_t* computeLowerBounds(const uint16_t& startActivityId, const InstanceData& project, const bool& energyReasoning = false);
 		
 		/*!
-		 * \param project The instance data of the instance.
-		 * \return The method returns an estimate of the project makespan.
-		 * \brief A lower bound is computed by using the "Extended Node Packing Bound" problem.
-		 */
-		static uint16_t lowerBoundOfMakespan(const InstanceData& project);
-		
-		/*!
 		 * \param project The data of the instance. (activity duration, precedence edges, ...)
 		 * \param solution The current solution of the project. The order is evaluated.
 		 * \param timeValuesById The earliest start time values for forward evaluation and transformed time values for backward evaluation.
@@ -252,17 +245,6 @@ class ScheduleSolver {
 		//! Assignment operator is forbidden.
 		ScheduleSolver& operator=(const ScheduleSolver&);
 
-		/*!
-		 * \tparam T A type of arrays.
-		 * \param array An input array.
-		 * \param size The number of elements of the input array.
-		 * \param value The value that should be added to the end of the returned array.
-		 * \return A copy of the input array with the value added to the end.
-		 * \warning You are responsible for calling 'delete' on the returned pointer.
-		 */
-		template <class T>
-		static T* copyAndPush(T* array, uint32_t size, T value);
-
 		/* IMMUTABLE DATA */
 		
 		//! A static parameters of a RCPSP project.
@@ -295,10 +277,6 @@ class ScheduleSolver {
 			std::vector<std::vector<uint16_t>*> allSuccessorsCache;
 			//! All predecessors of an activity. Cache purposes.
 			std::vector<std::vector<uint16_t>*> allPredecessorsCache;
-			//! The matrix of disjunctive activities.
-			bool **disjunctiveActivities;
-			//! A list of added edges to the problem.
-			std::vector<Edge> addedEdges;
 		};
 
 		//! The data of the read instance.
@@ -342,39 +320,6 @@ class ScheduleSolver {
 		
 
 		/* MISC DATA */
-		
-		//! The list element for the "Extended Node Packing Bound" problem.
-		struct ListActivity {
-			/*!
-			 * \param id Activity ID.
-			 * \param par The number of activities which are able to run concurrently with the activity 'activityId'.
-			 * \param d The duration of the activity 'activityId'.
-			 * \brief It initialises public members of this structure.
-			 */
-			ListActivity(uint16_t id, uint16_t par, uint8_t d) : activityId(id), concurrencyCoeff(par), duration(d) { };
-			/*!
-			 * \param x A list element to be compared with this one.
-			 * \brief It determines the order in the list if the list is sorted.
-			 * \return true if (*this < x) else false.
-			 */
-			bool operator<(const ListActivity& x) const {
-				if (concurrencyCoeff < x.concurrencyCoeff)
-					return true;
-				else if (concurrencyCoeff > x.concurrencyCoeff)
-					return false;
-				else if (duration > x.duration)
-					return true;
-				else
-					return false;
-			}
-
-			//! Activity ID.
-			uint16_t activityId;
-			//! The number of activities which can be processed simultaneously.
-			uint16_t concurrencyCoeff; 
-			//! The duration of the activity 'activityId'.
-			uint8_t duration;
-		};
 		
 		//! Purpose of this variable is to remember total computational time.
 		double totalRunTime;
