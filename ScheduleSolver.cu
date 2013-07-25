@@ -297,22 +297,34 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 
 	/* EVALUTATION ALGORITHM SELECTION */
 
-	if (project.numberOfActivities < 100)	{
-		cudaData.capacityResolutionAlgorithm = false;
+	// It computes required parameters.
+	double averageCapacity = ((double) cudaData.sumOfCapacities)/((double) project.numberOfResources);
+	uint8_t minResourceCapacity, maxResourceCapacity = cudaData.maximalCapacityOfResource;
+	minResourceCapacity = *min_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
+
+	double averageDuration = 0, branchFactor = 0;
+	for (uint16_t i = 0; i < project.numberOfActivities; ++i)	{
+		averageDuration += project.durationOfActivities[i];
+		branchFactor += project.numberOfSuccessors[i];
+	}
+	averageDuration /= project.numberOfActivities;
+	branchFactor /= project.numberOfActivities;
+
+	// Decision which evaluation algorithm should be used.
+	if (project.numberOfActivities < 45)	{
+		if ((averageCapacity <= 16.5) || (averageCapacity <= 19.5 && maxResourceCapacity >= 26) || (averageCapacity <= 17.75 && averageDuration >= 5.15))
+			cudaData.capacityResolutionAlgorithm = true;
+		else
+			cudaData.capacityResolutionAlgorithm = false;
+	} else if (project.numberOfActivities >= 45 && project.numberOfActivities < 75)	{
+		if ((averageCapacity <= 20.75) || (averageCapacity <= 24.75 && project.criticalPathMakespan >= 69 && maxResourceCapacity >= 27 && branchFactor <= 1.81))
+			cudaData.capacityResolutionAlgorithm = true;
+		else
+			cudaData.capacityResolutionAlgorithm = false;
+	} else if (project.numberOfActivities >= 75 && project.numberOfActivities < 105)	{
+		cudaData.capacityResolutionAlgorithm = (minResourceCapacity <= 20 ? true : false);
 	} else if (project.numberOfActivities >= 100 && project.numberOfActivities < 140)	{
-		// It computes required parameters.
-		uint32_t sumOfCapacities = cudaData.sumOfCapacities, sumOfSuccessors = 0;
-		uint8_t minimalResourceCapacity, maximalResourceCapacity = cudaData.maximalCapacityOfResource;
-		for (uint16_t i = 0; i < project.numberOfActivities; ++i)
-			sumOfSuccessors += project.numberOfSuccessors[i];
-		minimalResourceCapacity = *min_element(project.capacityOfResources, project.capacityOfResources+project.numberOfResources);
-		double branchFactor = (((double) sumOfSuccessors)/((double) project.numberOfActivities));
-		// Decision what evaluation algorithm should be used.
-		if (minimalResourceCapacity >= 29)
-			cudaData.capacityResolutionAlgorithm = false;
-		else if (sumOfCapacities >= 116 && branchFactor > 2.106)
-			cudaData.capacityResolutionAlgorithm = false;
-		else if (minimalResourceCapacity >= 25 && maximalResourceCapacity >= 42)
+		if ((minResourceCapacity >= 29) || (averageCapacity >= 29 && branchFactor > 2.106) || (minResourceCapacity >= 25 && maxResourceCapacity >= 42))
 			cudaData.capacityResolutionAlgorithm = false;
 		else
 			cudaData.capacityResolutionAlgorithm = true;
