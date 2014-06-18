@@ -455,6 +455,10 @@ bool ScheduleSolver::prepareCudaMemory(const InstanceData& project, InstanceSolu
 	} else	{
 		cudaData.copySuccessorsMatrixToSharedMemory = false;
 	}
+
+	// Add extra bytes for the alignment of the initial address.
+	dynSharedMemSize += sizeof(MoveInfo);
+
 	cudaData.successorsMatrixSize = successorsMatrixSize;
 
 	// Print info...

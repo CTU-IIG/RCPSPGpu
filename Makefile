@@ -1,7 +1,7 @@
 # Default C++ compiler.
-CPP=g++-4.6.3
+CPP=g++
 # Nvidia Cuda compiler.
-NVCC=nvcc -lcudart --compiler-bindir=/usr/x86_64-pc-linux-gnu/gcc-bin/4.6.3
+NVCC=nvcc -lcudart
 
 INST_PATH = /usr/local/bin/
 
@@ -16,7 +16,7 @@ else
 OPTIMISATION = -O3 --maxrregcount=32
 endif
 
-CAPABILITY = --generate-code arch=compute_20,code=sm_21
+CAPABILITY = --generate-code arch=compute_35,code=sm_35
 GCC_OPTIONS = -march=native,-Wall,-funsafe-math-optimizations,-pipe,-fopenmp
 
 # Compile all.

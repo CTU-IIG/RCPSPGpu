@@ -16,7 +16,7 @@
 enum TextureName	{
 	ACTIVITIES_RESOURCES = 0,
 	PREDECESSORS = 1,
-	PREDECESSORS_INDICES = 2,
+	PREDECESSORS_INDICES = 2
 };
 
 //! It defines the names of the structures in the device constant memory.

@@ -613,8 +613,12 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 
 		curand_init(3*blockIdx.x+71, blockIdx.x, 0, &randState);
 
+
 		/* ASSIGN SHARED MEMORY */
-		blockMergeArray = (MoveInfo*) dynamicSharedMemory; 
+
+		// It is necessary to use an offset to have the aligned memory!
+		blockMergeArray = (MoveInfo*) &dynamicSharedMemory[sizeof(MoveInfo)-(((uint64_t) dynamicSharedMemory) % sizeof(MoveInfo))];
+
 		if (maximalNeighbourhoodSize < 0xffff)	{
 			blockPartitionCounterUInt16 = (uint16_t*) (blockMergeArray+blockDim.x);
 			blockPartitionCounterUInt32 = NULL;
@@ -739,6 +743,7 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 		} else if (threadIdx.x == 0)	{
 			blockMergeArray[0] = blockMergeArray[curand(&randState) % blockDim.x];
 		}
+		__syncthreads();
 
 		if (threadIdx.x == 0)	{
 			blockReadPossible = false;
@@ -798,12 +803,14 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 			// Add move to tabu list.
 			cudaAddTurnToTabuList(cudaData.numberOfActivities, iterBestMove.i, iterBestMove.j, blockTabuList, blockTabuCache, blockTabuIdx, blockTabuListSize);
 		}
-		__syncthreads();
 
 		if (blockWriteBestBlock == true)	{
+			__syncthreads();
 			for (uint16_t i = threadIdx.x; i < cudaData.numberOfActivities; i += blockDim.x)
 				blockBestSolution[i] = blockCurrentOrder[i];
-			blockWriteBestBlock = false;
+
+			if (threadIdx.x == 0)
+				blockWriteBestBlock = false;
 		}
 		__syncthreads();
 
@@ -812,8 +819,10 @@ __global__ void cudaSolveRCPSP(const CudaData cudaData)	{
 				cudaData.ordersOfSolutions[blockIndexOfSetSolution*cudaData.numberOfActivities+i] = blockBestSolution[i];
 			for (uint16_t i = threadIdx.x; i < cudaData.maxTabuListSize; i += blockDim.x)
 				cudaData.tabuListsOfSetOfSolutions[blockIndexOfSetSolution*cudaData.maxTabuListSize+i] = blockTabuList[i];
+
 			__threadfence();
 			__syncthreads();
+
 			if (threadIdx.x == 0)	{
 				blockWriteSetSolution = false; 
 				atomicExch(cudaData.lockSetOfSolutions, DATA_AVAILABLE);
