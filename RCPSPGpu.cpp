@@ -1,3 +1,19 @@
+/*
+	This file is part of the RCPSPGpu program.
+
+	RCPSPGpu is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
+
+	RCPSPGpu is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with RCPSPGpu. If not, see <http://www.gnu.org/licenses/>.
+*/
 /*!
  * \file RCPSPGpu.cpp
  * \author Libor Bukata
@@ -52,7 +68,7 @@ int optionHelper(const string& option, int& i, const int& argc, char* argv[])	{
 
 /*!
  * Entry point for RCPSP solver. Command line arguments are processed, input instances are
- * read and solved. Results are printed to console (can be easily redirected to file). 
+ * read and solved. Results are printed to console (can be easily redirected to file).
  * Verbose mode is turned on if and only if one input file is read.
  * \param argc Number of command line arguments.
  * \param argv Command line arguments.
@@ -102,7 +118,10 @@ int rcpspGpu(int argc, char* argv[])	{
 			ConfigureRCPSP::WRITE_RESULT_FILE = true;
 
 		if (arg == "--help" || arg == "-h")	{
-			cout<<"RCPSP schedule solver."<<endl<<endl;
+			cout<<"Copyright 2012-2015 Libor Bukata and Premysl Sucha."<<endl;
+			cout<<"The program is distributed under the terms of the GNU General Public License."<<endl;
+			cout<<"RCPSP schedule solver."<<endl;
+			cout<<endl;
 			cout<<"Usage:"<<endl;
 			cout<<"\t"<<argv[0]<<" [options+parameters] --input-files file1 file2 ..."<<endl;
 			cout<<"Options:"<<endl;
@@ -146,13 +165,13 @@ int rcpspGpu(int argc, char* argv[])	{
 				}
 				resultFilename = string(filename, 0, i)+".res";
 			}
-			
+
 			InputReader reader;
 			// Read instance data.
 			reader.readFromFile(filename);
 			// Init schedule solver.
 			ScheduleSolver solver(reader, verbose);
-			// Solve read instance.	
+			// Solve read instance.
 			solver.solveSchedule(ConfigureRCPSP::NUMBER_OF_ITERATIONS);
 			// Print results.
 			if (verbose == true)	{

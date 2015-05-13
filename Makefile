@@ -28,8 +28,8 @@ doc:
 	doxygen Documentation/doxyfilehtml
 
 # Compile CreateHeaderFile program.
-CreateHeaderFile: $(OBJ) CreateHeaderFile.o
-	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) -o $@ $(OBJ) CreateHeaderFile.o
+CreateHeaderFile: InputReader.o CreateHeaderFile.o
+	$(NVCC) $(CAPABILITY) $(OPTIMISATION) --compiler-options $(GCC_OPTIONS) -o $@ InputReader.o CreateHeaderFile.o
 
 #c Compile RCPSPGpu program.
 RCPSPGpu: $(OBJ) RCPSPGpu.o

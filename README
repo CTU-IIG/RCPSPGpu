@@ -1,0 +1,21 @@
+The program RCPSPSGpu is distributed under the terms of the GNU General Public License.
+
+Authors: Libor Bukata (bukatlib@fel.cvut.cz) and Premysl Sucha (suchap@fel.cvut.cz).
+
+Supported SW:
+GNU Compiler Collection (GCC), CUDA
+
+How to install:
+1) If you would like to run bigger instances than J120, the following steps are necessary:
+	a) make CreateHeaderFile
+	b) ./CreateHeaderFile dataset_directory/*.sm (CudaConstants.h is updated)
+2) Update the Makefile file:
+	a) Set the CAPABILITY variable with respect to your graphics card architecture.
+	b) Set installation path - variable INST_PATH.
+3) Compile program: make all
+4) Optional program installation (the program can be executed from the current directory):
+	a) make install
+5) Optional generation and installation of documentation to the Documentation/ directory:
+	a) make doc
+
+For the information about program parameters run the command './RCPSPGpu --help'.
