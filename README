@@ -1,6 +1,6 @@
 The program RCPSPSGpu is distributed under the terms of the GNU General Public License.
 
-Authors: Libor Bukata (bukatlib@fel.cvut.cz) and Premysl Sucha (suchap@fel.cvut.cz).
+Authors: Libor Bukata (bukatlib@fel.cvut.cz) and Premysl Sucha (suchap@fel.cvut.cz)
 
 Supported SW:
 GNU Compiler Collection (GCC), CUDA
@@ -19,3 +19,13 @@ How to install:
 	a) make doc
 
 For the information about program parameters run the command './RCPSPGpu --help'.
+You can download the standard datasets from http://www.om-db.wi.tum.de/psplib/.
+
+Remark:
+If you find this software useful for your research or you create an algorithm
+based on this software, please cite our original paper in your publication list.
+
+Libor Bukata, Premysl Sucha, Zdenek Hanzalek, Solving the Resource Constrained
+Project Scheduling Problem using the parallel Tabu Search designed for the CUDA platform,
+Journal of Parallel and Distributed Computing, Volume 77, March 2015,
+Pages 58-68, ISSN 0743-7315, http://dx.doi.org/10.1016/j.jpdc.2014.11.005.
